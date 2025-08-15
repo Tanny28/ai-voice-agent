@@ -1,0 +1,21 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Configuration Management
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# HTTP and File Handling
+requests==2.31.0
+python-multipart==0.0.6
+
+# AI Services
+assemblyai==0.17.0
+google-generativeai==0.3.2
+
+# Development Dependencies (optional)
+pytest==7.4.3
+black==23.11.0
+mypy==1.7.1
