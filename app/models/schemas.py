@@ -32,7 +32,7 @@ class TTSResponse(BaseModel):
 
 class ChatMessage(BaseModel):
     """Model for individual chat messages."""
-    role: str = Field(..., regex="^(user|assistant)$")
+    role: str = Field(..., pattern="^(user|assistant)$")  # Fixed: regex -> pattern
     content: str = Field(..., min_length=1)
 
 
