@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Turn Detection Test - Day 18</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #2196f3 0%, #21cbf3 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(15px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .connected { background: rgba(76, 175, 80, 0.8); }
+        .disconnected { background: rgba(244, 67, 54, 0.8); }
+        .listening { background: rgba(255, 152, 0, 0.8); animation: pulse 2s infinite; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .controls {
+            text-align: center;
+            margin: 30px 0;
+        }
+        
+        button {
+            padding: 15px 30px;
+            margin: 10px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .record-btn { 
+            background: #4CAF50; 
+            color: white; 
+            font-size: 18px;
+            padding: 20px 40px;
+        }
+        .record-btn.recording { 
+            background: #f44336; 
+        }
+        
+        .turns-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            min-height: 300px;
+        }
+        
+        .turns-title {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #ffd700;
+            text-align: center;
+        }
+        
+        .turn {
+            background: rgba(255, 255, 255, 0.1);
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #4CAF50;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        .turn-number {
+            font-weight: bold;
+            color: #ffd700;
+            margin-bottom: 5px;
+        }
+        
+        .turn-text {
+            font-size: 1.1rem;
+            line-height: 1.4;
+        }
+        
+        .turn-meta {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        
+        .messages {
+            height: 150px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 0.9rem;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Turn Detection Test - Day 18</h1>
+        <p style="text-align: center; opacity: 0.8;">Speak naturally - the system will detect when you finish each turn!</p>
+        
+        <div id="status" class="status disconnected">
+            Status: Disconnected
+        </div>
+        
+        <div class="controls">
+            <button onclick="connect()">Connect</button>
+            <button id="recordBtn" class="record-btn" onclick="toggleRecording()" disabled>Start Listening</button>
+            <button onclick="clearTurns()">Clear Turns</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+        
+        <div class="turns-area">
+            <div class="turns-title">🎤 Detected Turns</div>
+            <div id="turnsContainer">
+                <div style="text-align: center; opacity: 0.6; margin-top: 100px;">
+                    Start listening to see detected turns appear here...
+                </div>
+            </div>
+        </div>
+        
+        <details style="margin-top: 30px;" open>
+            <summary style="cursor: pointer; font-weight: bold;">📋 System Messages</summary>
+            <div id="messages" class="messages"></div>
+        </details>
+    </div>
+
+    <script>
+        let websocket = null;
+        let mediaRecorder = null;
+        let isListening = false;
+        let turnCount = 0;
+
+        function connect() {
+            if (websocket) {
+                addMessage('Already connected!');
+                return;
+            }
+
+            websocket = new WebSocket('ws://localhost:8000/ws/turn-detection');
+
+            websocket.onopen = function(event) {
+                document.getElementById('status').textContent = 'Status: Connected';
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('recordBtn').disabled = false;
+                addMessage('✅ Connected to turn detection WebSocket');
+            };
+
+            websocket.onmessage = function(event) {
+                console.log('Received message:', event.data); // Debug log
+                
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data);
+                } catch (e) {
+                    console.error('Error parsing message:', e);
+                    addMessage('❌ Error parsing server message');
+                }
+            };
+
+            websocket.onclose = function(event) {
+                document.getElementById('status').textContent = 'Status: Disconnected';
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('recordBtn').disabled = true;
+                addMessage('❌ WebSocket connection closed');
+                websocket = null;
+            };
+
+            websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                addMessage(`🚨 WebSocket error: ${error}`);
+            };
+        }
+
+        function handleWebSocketMessage(data) {
+            console.log('Handling message type:', data.type, data); // Debug log
+            
+            switch(data.type) {
+                case 'connection_established':
+                    addMessage('🎯 Turn detection ready!');
+                    break;
+                    
+                case 'turn_detection_ready':
+                    addMessage('👂 Listening for speech turns');
+                    break;
+                    
+                case 'silence_detected':
+                    addMessage('🤫 Silence detected - analyzing turn...');
+                    break;
+                    
+                case 'turn_complete':
+                    addTurn(data);
+                    addMessage(`✅ Turn ${data.turn_number + 1} completed: "${data.transcript}"`);
+                    break;
+                    
+                case 'turn_processing':
+                    addMessage(`⏳ Processing turn ${data.turn_number + 1}...`);
+                    break;
+                    
+                case 'ready_for_next_turn':
+                    addMessage(`🎤 Ready for turn ${data.turn_number + 1}`);
+                    break;
+                    
+                case 'audio_received':
+                    // Don't spam console with audio chunks
+                    break;
+                    
+                case 'transcription':
+                    // Handle Day 17 style transcription messages
+                    addMessage(`📝 Transcription: "${data.text}"`);
+                    if (data.text) {
+                        addTurnFromTranscription(data);
+                    }
+                    break;
+                    
+                case 'error':
+                    addMessage(`❌ Error: ${data.message || data.error}`, 'error');
+                    break;
+                    
+                default:
+                    addMessage(`📨 ${data.type}: ${data.message || JSON.stringify(data)}`);
+            }
+        }
+
+        function addTurn(turnData) {
+            const container = document.getElementById('turnsContainer');
+            
+            // Clear placeholder if it exists
+            const placeholder = container.querySelector('[style*="text-align: center"]');
+            if (placeholder) {
+                placeholder.remove();
+            }
+            
+            const turnDiv = document.createElement('div');
+            turnDiv.className = 'turn';
+            
+            const transcript = turnData.transcript || 'No speech detected';
+            const turnNumber = turnData.turn_number !== undefined ? turnData.turn_number + 1 : ++turnCount;
+            const confidence = turnData.confidence ? (turnData.confidence * 100).toFixed(1) : 'N/A';
+            
+            turnDiv.innerHTML = `
+                <div class="turn-number">Turn ${turnNumber}</div>
+                <div class="turn-text">${transcript}</div>
+                <div class="turn-meta">
+                    Confidence: ${confidence}% • 
+                    ${new Date().toLocaleTimeString()}
+                </div>
+            `;
+            
+            container.appendChild(turnDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addTurnFromTranscription(data) {
+            // Handle transcription messages from Day 17 style endpoints
+            const container = document.getElementById('turnsContainer');
+            
+            const placeholder = container.querySelector('[style*="text-align: center"]');
+            if (placeholder) {
+                placeholder.remove();
+            }
+            
+            const turnDiv = document.createElement('div');
+            turnDiv.className = 'turn';
+            
+            const transcript = data.text || 'No speech detected';
+            const turnNumber = ++turnCount;
+            const confidence = data.confidence ? (data.confidence * 100).toFixed(1) : 'N/A';
+            
+            turnDiv.innerHTML = `
+                <div class="turn-number">Turn ${turnNumber}</div>
+                <div class="turn-text">${transcript}</div>
+                <div class="turn-meta">
+                    Confidence: ${confidence}% • 
+                    ${new Date().toLocaleTimeString()}
+                </div>
+            `;
+            
+            container.appendChild(turnDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function toggleRecording() {
+            if (isListening) {
+                stopListening();
+            } else {
+                await startListening();
+            }
+        }
+
+        async function startListening() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, { 
+                    mimeType: 'audio/webm;codecs=pcm',
+                    audioBitsPerSecond: 256000
+                });
+                
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstart = function() {
+                    isListening = true;
+                    document.getElementById('recordBtn').textContent = '🛑 Stop Listening';
+                    document.getElementById('recordBtn').className = 'record-btn recording';
+                    document.getElementById('status').textContent = 'Status: Listening for Turns';
+                    document.getElementById('status').className = 'status listening';
+                    
+                    addMessage('🎙️ Listening started - speak naturally, pauses will detect turn ends');
+                };
+                
+                mediaRecorder.onstop = function() {
+                    isListening = false;
+                    document.getElementById('recordBtn').textContent = '🎤 Start Listening';
+                    document.getElementById('recordBtn').className = 'record-btn';
+                    document.getElementById('status').textContent = 'Status: Connected';
+                    document.getElementById('status').className = 'status connected';
+                    
+                    stream.getTracks().forEach(track => track.stop());
+                    addMessage('🛑 Listening stopped');
+                };
+                
+                mediaRecorder.start(100);
+                
+            } catch (error) {
+                console.error('Recording error:', error);
+                addMessage(`🚨 Error starting recording: ${error.message}`, 'error');
+            }
+        }
+
+        function stopListening() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+        }
+
+        function clearTurns() {
+            document.getElementById('turnsContainer').innerHTML = 
+                '<div style="text-align: center; opacity: 0.6; margin-top: 100px;">Start listening to see detected turns appear here...</div>';
+            turnCount = 0;
+            addMessage('🗑️ Turns cleared');
+        }
+
+        function addMessage(message, type = 'info') {
+            const messages = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            
+            if (type === 'error') {
+                messageDiv.style.color = '#ff6b6b';
+                messageDiv.style.fontWeight = 'bold';
+            }
+            
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function disconnect() {
+            if (isListening) {
+                stopListening();
+            }
+            if (websocket) {
+                websocket.close();
+            }
+        }
+
+        window.onload = function() {
+            connect();
+        };
+    </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Real-Time Transcription Test - Day 17</title>
+    <title>Real-Time Transcription Test - Day 17 Fixed</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -96,6 +96,8 @@
             background: rgba(255, 255, 255, 0.1);
             border-radius: 10px;
             border: 2px dashed rgba(255, 255, 255, 0.3);
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         
         .transcript-placeholder {
@@ -189,7 +191,7 @@
             </div>
         </div>
         
-        <details style="margin-top: 30px;">
+        <details style="margin-top: 30px;" open>
             <summary style="cursor: pointer; font-weight: bold;">📋 System Messages</summary>
             <div id="messages" class="messages"></div>
         </details>
@@ -220,8 +222,15 @@
             };
 
             websocket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                handleWebSocketMessage(data);
+                console.log('Received WebSocket message:', event.data); // Debug log
+                
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data);
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                    addMessage('❌ Error parsing server message', 'error');
+                }
             };
 
             websocket.onclose = function(event) {
@@ -233,6 +242,7 @@
             };
 
             websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
                 addMessage(`🚨 WebSocket error: ${error}`, 'error');
             };
         }
@@ -247,6 +257,8 @@
         }
 
         function handleWebSocketMessage(data) {
+            console.log('Handling message type:', data.type, data); // Debug log
+            
             switch(data.type) {
                 case 'connection_established':
                     addMessage('🎯 Ready for transcription', 'success');
@@ -257,9 +269,17 @@
                     break;
                     
                 case 'transcription':
-                case 'live_transcription':
-                    updateTranscription(data.text);
-                    addMessage(`📝 ${data.text}`, 'info');
+                    // This is the key fix - handle transcription messages!
+                    if (data.text && data.text.trim()) {
+                        updateTranscription(data.text);
+                        addMessage(`📝 Transcription: "${data.text}"`, 'success');
+                    } else {
+                        addMessage('📝 Empty transcription received', 'info');
+                    }
+                    break;
+                    
+                case 'audio_chunk_received':
+                    // Don't spam logs with audio chunks
                     break;
                     
                 case 'error':
@@ -281,21 +301,13 @@
                 placeholder.remove();
             }
             
-            // Add new transcription
-            const span = document.createElement('span');
-            span.textContent = text + ' ';
-            span.style.background = 'rgba(255, 215, 0, 0.2)';
-            span.style.padding = '2px 4px';
-            span.style.borderRadius = '3px';
-            span.style.marginRight = '4px';
-            span.style.animation = 'fadeIn 0.5s ease-in';
-            
-            transcriptDiv.appendChild(span);
+            // Update with new transcription text
+            transcriptDiv.textContent = text;
             
             // Update stats
             transcriptionCount++;
             const words = text.trim().split(/\s+/).length;
-            wordCount += words;
+            wordCount = words;
             
             document.getElementById('transcriptionCount').textContent = transcriptionCount;
             document.getElementById('wordCount').textContent = wordCount;
@@ -314,18 +326,16 @@
 
         async function startRecording() {
             try {
-                // ✅ ASSEMBLYAI AUDIO FORMAT REQUIREMENTS:
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
-                        sampleRate: 16000,        // 16kHz as required by AssemblyAI
-                        channelCount: 1,          // Mono (16-bit is default)
+                        sampleRate: 16000,
+                        channelCount: 1,
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true
                     }
                 });
                 
-                // Create MediaRecorder with PCM codec for best compatibility
                 mediaRecorder = new MediaRecorder(stream, { 
                     mimeType: 'audio/webm;codecs=pcm',
                     audioBitsPerSecond: 256000
@@ -346,7 +356,7 @@
                     document.getElementById('status').className = 'status recording';
                     
                     recordingTimer = setInterval(updateRecordingTime, 1000);
-                    addMessage('🎙️ Recording started with 16kHz mono PCM format', 'success');
+                    addMessage('🎙️ Recording started - speak now and transcription will appear!', 'success');
                 };
                 
                 mediaRecorder.onstop = function() {
@@ -362,15 +372,14 @@
                     }
                     
                     stream.getTracks().forEach(track => track.stop());
-                    addMessage('🛑 Recording stopped', 'info');
+                    addMessage('🛑 Recording stopped - processing final transcription...', 'info');
                 };
                 
-                // Start recording with 100ms chunks for real-time streaming
                 mediaRecorder.start(100);
                 
             } catch (error) {
-                addMessage(`🚨 Error starting recording: ${error.message}`, 'error');
                 console.error('Recording error:', error);
+                addMessage(`🚨 Error starting recording: ${error.message}`, 'error');
             }
         }
 
@@ -390,10 +399,13 @@
         function clearTranscript() {
             const transcriptDiv = document.getElementById('liveTranscript');
             transcriptDiv.innerHTML = '<div class="transcript-placeholder">Start recording to see your words appear here in real-time...</div>';
+            
+            // Reset counters
             transcriptionCount = 0;
             wordCount = 0;
             document.getElementById('transcriptionCount').textContent = '0';
             document.getElementById('wordCount').textContent = '0';
+            
             addMessage('🗑️ Transcript cleared', 'info');
         }
 
