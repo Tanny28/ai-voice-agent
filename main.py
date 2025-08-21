@@ -1,27 +1,32 @@
 """
-AI Voice Agent - FastAPI Application with Streaming LLM Responses (Day 19 Final Fixed)
+AI Voice Agent - Day 20: Murf TTS Integration (FIXED - Downloads and converts to base64)
 """
 
 import asyncio
 import json
 import time
+import base64
+import aiohttp
 from contextlib import asynccontextmanager
-from typing import Dict, List
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pathlib import Path
 import assemblyai as aai
-from starlette.websockets import WebSocketState
 
-# Google Gemini imports - FIXED for new SDK
 try:
     from google import genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    print("Warning: Google GenAI SDK not installed. Run: pip install google-genai")
+    genai = None
+
+try:
+    from murf import Murf
+    MURF_AVAILABLE = True
+except ImportError:
+    MURF_AVAILABLE = False
+    print("Warning: Murf SDK not installed. Run: pip install murf")
 
 from app.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -34,43 +39,33 @@ logger = get_logger(__name__)
 UPLOADS_DIR = Path("uploads")
 UPLOADS_DIR.mkdir(exist_ok=True)
 
-# Configure AssemblyAI
+# Configure services
 if settings.assemblyai_api_key:
     aai.settings.api_key = settings.assemblyai_api_key
     logger.info("AssemblyAI configured for streaming transcription")
-else:
-    logger.warning("AssemblyAI API key not found")
 
-# Configure Google Gemini - FIXED CLIENT INITIALIZATION
-if GEMINI_AVAILABLE and getattr(settings, 'gemini_api_key', ''):
+if GEMINI_AVAILABLE and hasattr(settings, 'gemini_api_key') and settings.gemini_api_key:
     try:
-        # Initialize client with API key directly (no configure method)
         gemini_client = genai.Client(api_key=settings.gemini_api_key)
         logger.info("Google Gemini configured for streaming LLM responses")
     except Exception as e:
-        logger.error(f"Failed to initialize Gemini client: {e}")
         gemini_client = None
 else:
     gemini_client = None
-    logger.warning("Google Gemini API key not found - LLM streaming disabled")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting AI Voice Agent with Streaming LLM Responses")
+    logger.info("Starting AI Voice Agent with Murf TTS")
     yield
     logger.info("Shutting down AI Voice Agent application")
 
-# Initialize FastAPI application
 app = FastAPI(
-    title="AI Voice Agent with Streaming LLM",
-    description="Real-time transcription with streaming LLM responses",
-    version="1.9.0",
-    docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None,
+    title="AI Voice Agent with Murf TTS",
+    description="Day 20: Speech-to-Text with LLM responses converted to speech via Murf",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -79,528 +74,146 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# WebSocket helper functions
-def is_websocket_open(ws):
-    """Check if WebSocket is still connected."""
-    return ws.client_state == WebSocketState.CONNECTED
-
-async def safe_send(ws, message):
-    """Safely send WebSocket message, avoiding sends after close."""
-    if is_websocket_open(ws):
-        try:
-            await ws.send_text(message)
-        except Exception as e:
-            logger.error(f"WebSocket send error: {e}")
-    else:
-        logger.debug("WebSocket closed, skipping message send")
-
-# ==================================================================
-# DAY 19: STREAMING LLM RESPONSES - FINAL FIXED IMPLEMENTATION
-# ==================================================================
-
-async def generate_llm_response_stream(prompt: str, session_id: str = "default"):
-    """Generate a streaming response using the new Google GenAI SDK."""
-    if not gemini_client:
-        logger.error("Gemini client not configured")
-        print(f"[LLM ERROR] Gemini not configured")
-        return "I'm sorry, but I'm not configured to generate responses right now."
+class MurfTTSClient:
+    """Fixed Murf TTS client that downloads audio and converts to base64."""
     
-    try:
-        logger.info(f"Generating LLM response for session {session_id}")
-        print(f"\n[LLM PROMPT] {prompt}")
-        print(f"[LLM STREAMING] ", end="", flush=True)
-        
-        # FIXED: Use correct new SDK method
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        if MURF_AVAILABLE:
+            self.client = Murf(api_key=api_key)
+        else:
+            self.client = None
+    
+    async def download_audio_as_base64(self, audio_url: str):
+        """Download audio from URL and convert to base64."""
         try:
-            # Try the async method first
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as response:
+                    if response.status == 200:
+                        audio_data = await response.read()
+                        base64_audio = base64.b64encode(audio_data).decode('utf-8')
+                        return base64_audio
+                    else:
+                        print(f"[MURF ERROR] Failed to download audio: HTTP {response.status}")
+                        return None
+        except Exception as e:
+            print(f"[MURF ERROR] Download failed: {e}")
+            return None
+    
+    async def synthesize_text(self, text: str):
+        """Synthesize text to speech using Murf API and return base64."""
+        if not self.client:
+            print(f"[MURF ERROR] Murf SDK not available")
+            return None
+        
+        try:
+            print(f"[MURF SENDING] Text: {text[:60]}...")
+            
+            # Use Murf SDK to generate speech
+            response = self.client.text_to_speech.generate(
+                text=text,
+                voice_id="en-US-natalie",
+                format="MP3",
+                sample_rate=44100.0
+            )
+            
+            print(f"[MURF RESPONSE] Audio generated successfully!")
+            print(f"[MURF DETAILS] Length: {response.audio_length_in_seconds}s, Characters: {response.consumed_character_count}")
+            
+            # Check if we have a direct encoded audio
+            if hasattr(response, 'encoded_audio') and response.encoded_audio:
+                base64_audio = response.encoded_audio
+                print(f"[MURF AUDIO BASE64] {base64_audio[:100]}...")
+                print(f"[FULL BASE64 AUDIO]\n{base64_audio}")
+                return base64_audio
+            
+            # If no direct encoded audio, download from URL
+            elif hasattr(response, 'audio_file') and response.audio_file:
+                print(f"[MURF DOWNLOADING] Audio from URL: {response.audio_file[:50]}...")
+                base64_audio = await self.download_audio_as_base64(response.audio_file)
+                
+                if base64_audio:
+                    print(f"[MURF AUDIO BASE64] {base64_audio[:100]}...")
+                    print(f"[FULL BASE64 AUDIO]\n{base64_audio}")
+                    return base64_audio
+                else:
+                    print(f"[MURF ERROR] Failed to download and convert audio")
+                    return None
+            else:
+                print(f"[MURF ERROR] No audio data in response")
+                return None
+                
+        except Exception as e:
+            print(f"[MURF ERROR] {e}")
+            return None
+
+# Initialize Murf client
+murf_client = None
+if MURF_AVAILABLE and hasattr(settings, 'murf_api_key') and settings.murf_api_key:
+    murf_client = MurfTTSClient(settings.murf_api_key)
+    logger.info("Murf TTS client initialized")
+else:
+    logger.warning("Murf TTS client not available")
+
+async def generate_llm_response_with_tts(prompt: str, session_id: str = "default"):
+    """Generate LLM response and convert to speech via Murf."""
+    if not gemini_client:
+        fallback_response = f"Hello! You said '{prompt}'. This is a Day 20 AI voice agent demo with Murf TTS integration!"
+    else:
+        try:
             response = await gemini_client.aio.models.generate_content(
                 model="gemini-1.5-flash",
                 contents=[{"parts": [{"text": prompt}]}],
-                config={
-                    "temperature": 0.7,
-                    "max_output_tokens": 1024,
-                }
+                config={"temperature": 0.7, "max_output_tokens": 512}
             )
-            
-            accumulated_response = ""
-            if hasattr(response, 'text') and response.text:
-                # Simulate streaming by printing character by character
-                for char in response.text:
-                    print(char, end="", flush=True)
-                    accumulated_response += char
-                    await asyncio.sleep(0.02)
-        
-        except Exception as async_error:
-            logger.warning(f"Async method failed, trying sync: {async_error}")
-            
-            # Fallback to sync method with simulated streaming
-            response = gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=[{"parts": [{"text": prompt}]}],
-                config={
-                    "temperature": 0.7,
-                    "max_output_tokens": 1024,
-                }
-            )
-            
-            accumulated_response = ""
-            if hasattr(response, 'text') and response.text:
-                # Simulate streaming output
-                for char in response.text:
-                    print(char, end="", flush=True)
-                    accumulated_response += char
-                    await asyncio.sleep(0.02)
-        
-        print()  # New line after response
-        logger.info(f"LLM response generated: {len(accumulated_response)} characters")
-        
-        return accumulated_response
-        
-    except Exception as e:
-        error_msg = f"Error generating LLM response: {e}"
-        logger.error(error_msg)
-        print(f"[LLM ERROR] {error_msg}")
-        
-        # Fallback response for demonstration
-        fallback_response = f"I understand you said: '{prompt}'. This is a simulated AI response for Day 19 demonstration."
-        
-        # Print fallback with streaming effect
-        for char in fallback_response:
-            print(char, end="", flush=True)
-            await asyncio.sleep(0.02)
-        print()
-        
-        return fallback_response
+            fallback_response = response.text if hasattr(response, 'text') and response.text else f"I understand you said: '{prompt}'. This is a Day 20 demo response."
+        except Exception as e:
+            logger.warning(f"Gemini error: {e}")
+            fallback_response = f"Hello! You said '{prompt}'. This is a Day 20 AI voice agent demo with Murf TTS integration!"
+    
+    # Print streaming effect
+    print(f"\n[LLM PROMPT] {prompt}")
+    print(f"[LLM STREAMING] ", end="", flush=True)
+    for char in fallback_response:
+        print(char, end="", flush=True)
+        await asyncio.sleep(0.01)
+    print()
+    
+    # Send to Murf for TTS conversion
+    if murf_client:
+        print(f"[MURF TTS] Converting LLM response to speech...")
+        await murf_client.synthesize_text(fallback_response)
+    else:
+        print(f"[MURF DISABLED] No Murf client available")
+    
+    return fallback_response
 
-@app.websocket("/ws/llm-streaming")
-async def websocket_llm_streaming(websocket: WebSocket):
-    """WebSocket endpoint for turn detection with streaming LLM responses - FIXED MESSAGE HANDLING."""
-    await websocket.accept()
-    logger.info("LLM streaming WebSocket connection established")
-    
-    if not settings.assemblyai_api_key:
-        await safe_send(websocket, json.dumps({
-            "type": "error",
-            "message": "AssemblyAI API key not configured",
-            "timestamp": time.time()
-        }))
-        await websocket.close(code=1000, reason="AssemblyAI API key required")
-        return
-    
-    session_id = f"llm_session_{int(time.time())}"
-    audio_file_path = UPLOADS_DIR / f"{session_id}.webm"
+@app.get("/test-murf")
+async def test_murf_tts():
+    """Day 20: Test Murf TTS integration with base64 output."""
+    if not murf_client:
+        return {"error": "Murf client not configured - install murf SDK and add MURF_API_KEY"}
     
     try:
-        await safe_send(websocket, json.dumps({
-            "type": "connection_established",
-            "message": "LLM streaming ready - speak to get AI responses!",
-            "session_id": session_id,
-            "llm_available": gemini_client is not None,
-            "timestamp": time.time()
-        }))
+        test_text = "Hello! This is Day 20 of the 30 Days of AI Voice Agents challenge. Testing Murf TTS integration with base64 audio output!"
         
-        # Collect audio chunks for turn detection
-        audio_chunks = []
-        turn_count = 0
+        print(f"\n[DAY 20 TEST] 🧪 Testing Murf TTS with base64 conversion...")
+        base64_audio = await murf_client.synthesize_text(test_text)
         
-        with open(audio_file_path, "wb") as audio_file:
-            silence_start = None
-            
-            while True:
-                try:
-                    # FIXED: Safer message handling approach
-                    message = await asyncio.wait_for(websocket.receive(), timeout=2.0)
-                    
-                    if 'bytes' in message:
-                        # Handle binary audio data
-                        data = message['bytes']
-                        
-                        # Write audio data
-                        audio_file.write(data)
-                        audio_chunks.append(data)
-                        
-                        # Reset silence detection
-                        silence_start = None
-                        
-                        # Send acknowledgment
-                        await safe_send(websocket, json.dumps({
-                            "type": "audio_received",
-                            "chunk_size": len(data),
-                            "total_chunks": len(audio_chunks),
-                            "timestamp": time.time()
-                        }))
-                    
-                    elif 'text' in message:
-                        # Handle text control messages
-                        text_data = message['text']
-                        logger.info(f"Received text control message: {text_data}")
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "control_message_received",
-                            "message": f"Received: {text_data}",
-                            "timestamp": time.time()
-                        }))
-                    
-                    else:
-                        logger.warning(f"Unknown message format: {message}")
-                    
-                except asyncio.TimeoutError:
-                    # Potential turn end detected due to silence
-                    current_time = time.time()
-                    
-                    if silence_start is None:
-                        silence_start = current_time
-                        logger.info("Silence detected - potential turn ending")
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "silence_detected",
-                            "message": "Analyzing speech turn...",
-                            "timestamp": current_time
-                        }))
-                    
-                    # Check if silence duration indicates turn end (2 seconds)
-                    silence_duration = current_time - silence_start
-                    if silence_duration >= 2.0 and audio_chunks:
-                        logger.info(f"Turn end detected after {silence_duration:.1f}s silence")
-                        
-                        # Process turn and generate LLM response
-                        await process_turn_with_llm(websocket, audio_file_path, 
-                                                  turn_count, session_id)
-                        
-                        turn_count += 1
-                        
-                        # Reset for next turn
-                        audio_chunks.clear()
-                        silence_start = None
-                        
-                        # Create new file for next turn
-                        audio_file_path = UPLOADS_DIR / f"{session_id}_turn_{turn_count}.webm"
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "ready_for_next_turn",
-                            "message": "Ready for next turn - continue speaking!",
-                            "turn_number": turn_count + 1,
-                            "timestamp": time.time()
-                        }))
-                        
-                        # Start new audio file
-                        break
-                        
-                except WebSocketDisconnect:
-                    logger.info("WebSocket disconnected during LLM streaming")
-                    break
-                except Exception as e:
-                    logger.error(f"Error in LLM streaming: {e}")
-                    break
-        
-        # Process final turn if any audio was collected
-        if audio_chunks:
-            await process_turn_with_llm(websocket, audio_file_path, 
-                                      turn_count, session_id)
-        
-    except WebSocketDisconnect:
-        logger.info("LLM streaming WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"Error in LLM streaming: {e}")
-        print(f"[LLM STREAMING ERROR] {e}")
-    finally:
-        logger.info(f"LLM streaming session {session_id} completed with {turn_count + 1} turns")
-
-async def process_turn_with_llm(websocket: WebSocket, audio_file_path: Path, 
-                               turn_number: int, session_id: str):
-    """Process a detected turn, transcribe it, and generate an LLM response."""
-    try:
-        if not audio_file_path.exists() or audio_file_path.stat().st_size == 0:
-            logger.warning(f"No audio data for turn {turn_number}")
-            return
-        
-        logger.info(f"Processing turn {turn_number} with LLM: {audio_file_path}")
-        
-        # Notify client that turn is being processed
-        await safe_send(websocket, json.dumps({
-            "type": "turn_processing",
-            "turn_number": turn_number,
-            "message": f"Processing turn {turn_number}...",
-            "timestamp": time.time()
-        }))
-        
-        # Transcribe the turn audio
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(str(audio_file_path))
-        
-        if transcript.error:
-            logger.error(f"Transcription error for turn {turn_number}: {transcript.error}")
-            print(f"[TURN {turn_number} ERROR] {transcript.error}")
-            
-            await safe_send(websocket, json.dumps({
-                "type": "turn_error",
-                "turn_number": turn_number,
-                "error": transcript.error,
-                "timestamp": time.time()
-            }))
+        if base64_audio:
+            return {
+                "status": "SUCCESS",
+                "message": "✅ Murf TTS test completed! Check console for [FULL BASE64 AUDIO] output",
+                "text_sent": test_text,
+                "audio_length": len(base64_audio),
+                "base64_preview": base64_audio[:100] + "...",
+                "screenshot_instruction": "📸 Screenshot the [FULL BASE64 AUDIO] output in console for LinkedIn!"
+            }
         else:
-            # Successful turn transcription
-            user_input = transcript.text.strip()
-            print(f"[TURN {turn_number} TRANSCRIBED] {user_input}")
-            logger.info(f"Turn {turn_number} transcribed: {user_input}")
-            
-            # Send transcription to client
-            await safe_send(websocket, json.dumps({
-                "type": "turn_transcribed",
-                "turn_number": turn_number,
-                "transcript": user_input,
-                "confidence": getattr(transcript, 'confidence', 1.0),
-                "timestamp": time.time()
-            }))
-            
-            # Generate LLM response if user said something meaningful
-            if user_input and len(user_input.strip()) > 2:
-                # Notify client that LLM is generating response
-                await safe_send(websocket, json.dumps({
-                    "type": "llm_generating",
-                    "turn_number": turn_number,
-                    "message": "Generating AI response...",
-                    "timestamp": time.time()
-                }))
-                
-                # Generate streaming LLM response
-                llm_response = await generate_llm_response_stream(
-                    user_input, 
-                    f"{session_id}_turn_{turn_number}"
-                )
-                
-                # Send completed LLM response to client
-                await safe_send(websocket, json.dumps({
-                    "type": "llm_response_complete",
-                    "turn_number": turn_number,
-                    "user_input": user_input,
-                    "llm_response": llm_response,
-                    "session_id": session_id,
-                    "timestamp": time.time()
-                }))
-                
-                print(f"[TURN {turn_number} COMPLETE] User: {user_input} | LLM: {llm_response[:100]}...")
-            else:
-                await safe_send(websocket, json.dumps({
-                    "type": "turn_complete_no_response",
-                    "turn_number": turn_number,
-                    "message": "Turn completed but no meaningful speech detected",
-                    "timestamp": time.time()
-                }))
+            return {"error": "❌ Failed to generate or convert audio to base64"}
             
     except Exception as e:
-        logger.error(f"Error processing turn {turn_number}: {e}")
-        print(f"[TURN {turn_number} ERROR] {e}")
-
-# Keep existing endpoints for backward compatibility
-@app.websocket("/ws/turn-detection")
-async def websocket_turn_detection(websocket: WebSocket):
-    """Day 18: Turn detection without LLM responses - ALSO FIXED."""
-    await websocket.accept()
-    logger.info("Turn detection WebSocket connection established (Day 18 mode)")
-    
-    await safe_send(websocket, json.dumps({
-        "type": "connection_established",
-        "message": "Turn detection ready (Day 18 mode - no LLM responses)",
-        "timestamp": time.time()
-    }))
-    
-    session_id = f"turn_session_{int(time.time())}"
-    audio_file_path = UPLOADS_DIR / f"{session_id}.webm"
-    audio_chunks = []
-    turn_count = 0
-    
-    try:
-        with open(audio_file_path, "wb") as audio_file:
-            silence_start = None
-            
-            while True:
-                try:
-                    # FIXED: Handle both text and binary messages
-                    message = await asyncio.wait_for(websocket.receive(), timeout=2.0)
-                    
-                    if 'text' in message:
-                        # Handle text control messages
-                        text_data = message['text']
-                        logger.info(f"Day 18 received text message: {text_data}")
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "text_echo",
-                            "message": f"Day 18 received: {text_data}",
-                            "timestamp": time.time()
-                        }))
-                        
-                    elif 'bytes' in message:
-                        # Handle binary audio data
-                        audio_data = message['bytes']
-                        audio_file.write(audio_data)
-                        audio_chunks.append(audio_data)
-                        
-                        # Reset silence detection
-                        silence_start = None
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "audio_received",
-                            "chunk_size": len(audio_data),
-                            "total_chunks": len(audio_chunks),
-                            "timestamp": time.time()
-                        }))
-                    
-                except asyncio.TimeoutError:
-                    # Handle silence detection for turn ending
-                    current_time = time.time()
-                    
-                    if silence_start is None:
-                        silence_start = current_time
-                        logger.info("Silence detected in Day 18 mode")
-                        
-                        await safe_send(websocket, json.dumps({
-                            "type": "silence_detected",
-                            "message": "Silence detected - turn ending soon...",
-                            "timestamp": current_time
-                        }))
-                    
-                    # Check if silence indicates turn end
-                    silence_duration = current_time - silence_start
-                    if silence_duration >= 2.0 and audio_chunks:
-                        logger.info(f"Turn {turn_count} ended after {silence_duration:.1f}s silence")
-                        
-                        # Process the turn (Day 18 - just transcription, no LLM)
-                        await process_turn_day18(websocket, audio_file_path, turn_count, session_id)
-                        
-                        turn_count += 1
-                        audio_chunks.clear()
-                        silence_start = None
-                        
-                        # Reset for next turn
-                        audio_file_path = UPLOADS_DIR / f"{session_id}_turn_{turn_count}.webm"
-                        break
-                
-                except WebSocketDisconnect:
-                    logger.info("Day 18 turn detection WebSocket disconnected")
-                    break
-                except Exception as e:
-                    logger.error(f"Error in Day 18 turn detection: {e}")
-                    break
-        
-        # Process final turn if needed
-        if audio_chunks:
-            await process_turn_day18(websocket, audio_file_path, turn_count, session_id)
-    
-    except WebSocketDisconnect:
-        logger.info("Day 18 turn detection WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"Error in Day 18 turn detection handler: {e}")
-    finally:
-        logger.info(f"Day 18 session {session_id} completed with {turn_count + 1} turns")
-
-async def process_turn_day18(websocket: WebSocket, audio_file_path: Path, 
-                           turn_number: int, session_id: str):
-    """Process turn for Day 18 - transcription only, no LLM response."""
-    try:
-        if not audio_file_path.exists() or audio_file_path.stat().st_size == 0:
-            logger.warning(f"No audio data for Day 18 turn {turn_number}")
-            return
-        
-        logger.info(f"Processing Day 18 turn {turn_number}: {audio_file_path}")
-        
-        # Transcribe the audio
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(str(audio_file_path))
-        
-        if transcript.error:
-            logger.error(f"Day 18 transcription error: {transcript.error}")
-            print(f"[DAY 18 TURN {turn_number} ERROR] {transcript.error}")
-        else:
-            user_input = transcript.text.strip()
-            print(f"[DAY 18 TURN {turn_number} COMPLETE] {user_input}")
-            
-            # Send transcription result to client
-            await safe_send(websocket, json.dumps({
-                "type": "turn_complete",
-                "turn_number": turn_number,
-                "transcript": user_input,
-                "confidence": getattr(transcript, 'confidence', 1.0),
-                "mode": "day_18",
-                "timestamp": time.time()
-            }))
-    
-    except Exception as e:
-        logger.error(f"Error processing Day 18 turn {turn_number}: {e}")
-        print(f"[DAY 18 TURN {turn_number} ERROR] {e}")
-
-@app.websocket("/ws/transcribe")
-async def websocket_real_time_transcription(websocket: WebSocket):
-    """Day 17: Real-time transcription endpoint."""
-    await websocket.accept()
-    logger.info("Real-time transcription WebSocket connection established")
-    
-    if not settings.assemblyai_api_key:
-        await safe_send(websocket, json.dumps({
-            "type": "error",
-            "message": "AssemblyAI API key not configured",
-            "timestamp": time.time()
-        }))
-        await websocket.close(code=1000, reason="AssemblyAI API key required")
-        return
-    
-    session_id = f"session_{int(time.time())}"
-    audio_file_path = UPLOADS_DIR / f"{session_id}.webm"
-    
-    try:
-        await safe_send(websocket, json.dumps({
-            "type": "connection_established",
-            "message": "Ready for real-time transcription",
-            "session_id": session_id,
-            "timestamp": time.time()
-        }))
-        
-        audio_chunks = []
-        
-        with open(audio_file_path, "wb") as audio_file:
-            while True:
-                try:
-                    data = await websocket.receive_bytes()
-                    audio_file.write(data)
-                    audio_chunks.append(data)
-                    
-                    await safe_send(websocket, json.dumps({
-                        "type": "audio_chunk_received",
-                        "chunk_size": len(data),
-                        "total_chunks": len(audio_chunks),
-                        "timestamp": time.time()
-                    }))
-                    
-                except WebSocketDisconnect:
-                    logger.info("WebSocket disconnected during audio collection")
-                    break
-                except Exception as e:
-                    logger.error(f"Error receiving audio data: {e}")
-                    break
-        
-        # Transcribe complete audio
-        if audio_chunks and audio_file_path.exists():
-            transcriber = aai.Transcriber()
-            transcript = transcriber.transcribe(str(audio_file_path))
-            
-            if transcript.error:
-                print(f"[TRANSCRIPTION ERROR] {transcript.error}")
-            else:
-                print(f"[TRANSCRIPTION] {transcript.text}")
-                
-                await safe_send(websocket, json.dumps({
-                    "type": "transcription",
-                    "text": transcript.text,
-                    "is_final": True,
-                    "confidence": getattr(transcript, 'confidence', 1.0),
-                    "session_id": session_id,
-                    "timestamp": time.time()
-                }))
-        
-    except WebSocketDisconnect:
-        logger.info("Real-time transcription WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"Error in real-time transcription: {e}")
+        return {"error": f"❌ Test failed: {e}"}
 
 @app.get("/health")
 async def health_check():
@@ -608,31 +221,31 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": time.time(),
-        "version": "1.9.0",
-        "features": ["turn_detection", "llm_streaming", "real_time_transcription"],
+        "version": "2.0.0",
+        "day": 20,
         "services": {
             "assemblyai": "available" if settings.assemblyai_api_key else "unavailable",
-            "gemini": "available" if gemini_client else "unavailable"
+            "gemini": "available" if gemini_client else "unavailable",
+            "murf": "available" if murf_client else "unavailable"
         }
     }
 
-@app.get("/", include_in_schema=False)
-async def serve_frontend():
-    """Serve the main frontend application."""
-    return JSONResponse({
-        "message": "AI Voice Agent with Streaming LLM Responses (Day 19 Fixed)",
-        "websocket_endpoints": {
-            "llm_streaming": "/ws/llm-streaming",
-            "turn_detection": "/ws/turn-detection",
-            "real_time_transcription": "/ws/transcribe"
+@app.get("/")
+async def root():
+    """Day 20: AI Voice Agent with Murf TTS."""
+    return {
+        "message": "🎵 Day 20: AI Voice Agent with Murf TTS Integration - WORKING!",
+        "endpoints": {
+            "test_murf": "/test-murf",
+            "health": "/health"
         },
-        "api_endpoints": {
-            "health": "/health",
-            "docs": "/docs"
-        },
-        "version": "1.9.0",
-        "day": 19
-    })
+        "demo_instructions": [
+            "1. Visit /test-murf to test integration",
+            "2. Check console for [FULL BASE64 AUDIO] output",
+            "3. Screenshot the base64 audio for LinkedIn post",
+            "4. Success! Your Day 20 challenge is complete!"
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
