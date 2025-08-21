@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day 19: Voice Demo - Speak Here!</title>
+    
+    <!-- CSP allowing WebSocket connections -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws://localhost:8000 ws://127.0.0.1:8000 http://localhost:* http://127.0.0.1:*; script-src 'self' 'unsafe-inline';">
+    
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(15px);
+        }
+        .status { 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            font-weight: bold; 
+            text-align: center;
+        }
+        .connected { background: rgba(76, 175, 80, 0.8); }
+        .disconnected { background: rgba(244, 67, 54, 0.8); }
+        .recording { background: rgba(255, 152, 0, 0.8); animation: pulse 2s infinite; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        button { 
+            padding: 15px 30px; 
+            margin: 10px; 
+            border: none; 
+            border-radius: 25px; 
+            font-size: 16px; 
+            font-weight: bold; 
+            cursor: pointer; 
+            transition: all 0.3s ease;
+        }
+        
+        .speak-btn { 
+            background: #4CAF50; 
+            color: white; 
+            font-size: 20px;
+            padding: 20px 40px;
+        }
+        .speak-btn.recording { 
+            background: #f44336; 
+            animation: recordPulse 1s infinite;
+        }
+        .speak-btn:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); 
+        }
+        
+        @keyframes recordPulse {
+            0% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(244, 67, 54, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0); }
+        }
+        
+        .response-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            min-height: 300px;
+        }
+        
+        .conversation {
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 10px;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        .user-message {
+            background: rgba(100, 200, 255, 0.3);
+            border-left: 4px solid #64C8FF;
+        }
+        
+        .ai-message {
+            background: rgba(255, 165, 0, 0.3);
+            border-left: 4px solid #FFA500;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1> Day 19: Voice AI Demo - SPEAK HERE!</h1>
+        
+        <div class="instructions">
+            <h3> How to Demo:</h3>
+            <ol>
+                <li><strong>Click "Start Speaking"</strong> - Allow microphone access</li>
+                <li><strong>Speak clearly:</strong> "Hello, can you help me learn Python?"</li>
+                <li><strong>Wait 2-3 seconds</strong> - Let silence detection work</li>
+                <li><strong>Watch responses</strong> - See transcription + AI response appear</li>
+                <li><strong>Continue talking</strong> - Have a full conversation!</li>
+            </ol>
+        </div>
+        
+        <div id="status" class="status disconnected">
+            Status: Connecting...
+        </div>
+        
+        <div style="text-align: center;">
+            <button id="speakBtn" class="speak-btn" onclick="toggleSpeaking()" disabled>
+                🎤 Start Speaking
+            </button>
+            <button onclick="clearConversation()" style="background: #6c757d; color: white;">
+                🗑️ Clear Chat
+            </button>
+        </div>
+        
+        <div class="response-area">
+            <h3> Live Conversation:</h3>
+            <div id="conversationArea">
+                <div style="text-align: center; opacity: 0.6; margin-top: 50px;">
+                    Click "Start Speaking" and begin talking to see your conversation with AI appear here...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let mediaRecorder = null;
+        let isRecording = false;
+        let conversationCount = 0;
+
+        // Auto-connect on page load
+        window.onload = function() {
+            connectToBackend();
+        };
+
+        function connectToBackend() {
+            console.log('🔄 Connecting to Day 19 LLM streaming...');
+            websocket = new WebSocket('ws://localhost:8000/ws/llm-streaming');
+
+            websocket.onopen = () => {
+                updateStatus('Connected - Ready to Speak!', true);
+                document.getElementById('speakBtn').disabled = false;
+                console.log('✅ Connected to LLM streaming backend');
+            };
+
+            websocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleBackendMessage(data);
+            };
+
+            websocket.onclose = () => {
+                updateStatus('Disconnected', false);
+                document.getElementById('speakBtn').disabled = true;
+                console.log('❌ Disconnected from backend');
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function handleBackendMessage(data) {
+            console.log(' Backend message:', data);
+            
+            switch(data.type) {
+                case 'turn_transcribed':
+                    addUserMessage(data.transcript);
+                    break;
+                    
+                case 'llm_response_complete':
+                    addAIMessage(data.llm_response);
+                    break;
+                    
+                case 'llm_generating':
+                    showAIThinking();
+                    break;
+                    
+                default:
+                    console.log('Other message:', data.type, data.message);
+            }
+        }
+
+        function updateStatus(text, connected) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `Status: ${text}`;
+            statusEl.className = connected ? 'status connected' : 'status disconnected';
+        }
+
+        async function toggleSpeaking() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                await startRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, { 
+                    mimeType: 'audio/webm;codecs=pcm',
+                    audioBitsPerSecond: 256000
+                });
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstart = () => {
+                    isRecording = true;
+                    const btn = document.getElementById('speakBtn');
+                    btn.textContent = '🛑 Stop Speaking';
+                    btn.className = 'speak-btn recording';
+                    updateStatus('🎤 Listening - Speak Now!', true);
+                    document.getElementById('status').className = 'status recording';
+                };
+                
+                mediaRecorder.onstop = () => {
+                    isRecording = false;
+                    const btn = document.getElementById('speakBtn');
+                    btn.textContent = '🎤 Start Speaking';
+                    btn.className = 'speak-btn';
+                    updateStatus('Connected - Ready to Speak!', true);
+                    
+                    stream.getTracks().forEach(track => track.stop());
+                };
+                
+                mediaRecorder.start(100); // Send audio chunks every 100ms
+                
+            } catch (error) {
+                console.error('❌ Error accessing microphone:', error);
+                alert('Error accessing microphone: ' + error.message);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+        }
+
+        function addUserMessage(text) {
+            const container = document.getElementById('conversationArea');
+            
+            // Clear placeholder if it exists
+            if (container.children.length === 1 && container.firstChild.textContent.includes('Click "Start Speaking"')) {
+                container.innerHTML = '';
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'conversation user-message';
+            messageDiv.innerHTML = `
+                <strong> You said:</strong><br>
+                ${text}
+            `;
+            
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function showAIThinking() {
+            const container = document.getElementById('conversationArea');
+            
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'conversation ai-message';
+            thinkingDiv.id = 'thinking';
+            thinkingDiv.innerHTML = `
+                <strong> AI is thinking...</strong><br>
+                <em>Generating response...</em>
+            `;
+            
+            container.appendChild(thinkingDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addAIMessage(text) {
+            const container = document.getElementById('conversationArea');
+            
+            // Remove thinking indicator
+            const thinking = document.getElementById('thinking');
+            if (thinking) {
+                thinking.remove();
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'conversation ai-message';
+            messageDiv.innerHTML = `
+                <strong> AI Response:</strong><br>
+                ${text}
+            `;
+            
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+            
+            conversationCount++;
+        }
+
+        function clearConversation() {
+            const container = document.getElementById('conversationArea');
+            container.innerHTML = `
+                <div style="text-align: center; opacity: 0.6; margin-top: 50px;">
+                    Click "Start Speaking" and begin talking to see your conversation with AI appear here...
+                </div>
+            `;
+            conversationCount = 0;
+        }
+    </script>
+</body>
+</html>

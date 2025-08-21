@@ -20,3 +20,8 @@ google-generativeai==0.3.2
 pytest==7.4.3
 black==23.11.0
 mypy==1.7.1
+google-generativeai>=0.3.0
+assemblyai
+fastapi
+uvicorn
+pydantic-settings

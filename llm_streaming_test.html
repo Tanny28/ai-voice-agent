@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day 19 LLM Streaming Test - Fixed</title>
+    
+    <!-- CSP allowing WebSocket connections -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws://localhost:8000 ws://127.0.0.1:8000 http://localhost:* http://127.0.0.1:*; script-src 'self' 'unsafe-inline';">
+    
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .status { padding: 15px; margin: 10px 0; border-radius: 5px; font-weight: bold; }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .log { background: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 3px; cursor: pointer; }
+        .connect { background: #28a745; color: white; }
+        .test { background: #007bff; color: white; }
+    </style>
+</head>
+<body>
+    <h1>🎯 Day 19: LLM Streaming Test - CSP Fixed</h1>
+    
+    <div id="status" class="status disconnected">
+        Status: Disconnected
+    </div>
+    
+    <div>
+        <button class="connect" onclick="connectToLLM()">Connect to LLM Streaming</button>
+        <button class="test" onclick="sendTestMessage()">Send Test Message</button>
+    </div>
+    
+    <h3>📋 WebSocket Log:</h3>
+    <div id="log" class="log">Waiting for connection...</div>
+
+    <script>
+        let ws = null;
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div style="color: #333; margin: 2px 0;">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            if (connected) {
+                statusDiv.textContent = '✅ Status: Connected to LLM Streaming';
+                statusDiv.className = 'status connected';
+            } else {
+                statusDiv.textContent = '❌ Status: Disconnected';
+                statusDiv.className = 'status disconnected';
+            }
+        }
+
+        function connectToLLM() {
+            if (ws) {
+                log('⚠️ Already connected or connecting...');
+                return;
+            }
+
+            log('🔄 Connecting to ws://localhost:8000/ws/llm-streaming...');
+            
+            try {
+                ws = new WebSocket('ws://localhost:8000/ws/llm-streaming');
+
+                ws.onopen = () => {
+                    log('✅ Connected to LLM streaming endpoint!');
+                    updateStatus(true);
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 Server [${data.type}]: ${data.message || JSON.stringify(data)}`);
+                    
+                    // Highlight important messages
+                    if (data.type === 'llm_response_complete') {
+                        log(`🤖 <span style="color: #007bff; font-weight: bold;">LLM Response: "${data.llm_response}"</span>`);
+                    } else if (data.type === 'turn_transcribed') {
+                        log(`🎤 <span style="color: #28a745; font-weight: bold;">You said: "${data.transcript}"</span>`);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log('❌ WebSocket error: ' + error.message);
+                    console.error('WebSocket error details:', error);
+                };
+
+                ws.onclose = (event) => {
+                    log(`🔌 Disconnected from LLM streaming (Code: ${event.code})`);
+                    updateStatus(false);
+                    ws = null;
+                };
+
+            } catch (error) {
+                log('❌ Failed to create WebSocket: ' + error.message);
+                console.error('Connection error:', error);
+            }
+        }
+
+        function sendTestMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('⚠️ Not connected. Please connect first.');
+                return;
+            }
+
+            const testMessage = JSON.stringify({
+                type: "test",
+                message: "Hello from CSP-fixed test client",
+                timestamp: Date.now()
+            });
+
+            ws.send(testMessage);
+            log(`📤 Sent test message: ${testMessage}`);
+        }
+
+        // Auto-connect on page load
+        window.onload = () => {
+            log('📄 Page loaded. Ready to connect to Day 19 LLM streaming...');
+        };
+    </script>
+</body>
+</html>
