@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day 22: Streaming Audio Playback</title>
+    
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1000px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(15px);
+        }
+        .status { 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            font-weight: bold; 
+            text-align: center;
+        }
+        .connected { background: rgba(76, 175, 80, 0.8); }
+        .disconnected { background: rgba(244, 67, 54, 0.8); }
+        .streaming { background: rgba(255, 152, 0, 0.8); animation: pulse 2s infinite; }
+        .playing { background: rgba(156, 39, 176, 0.8); animation: pulse 1.5s infinite; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        input[type="text"] {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+        }
+        
+        button {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 25px;
+            background: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        button:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+        
+        .audio-controls {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .audio-controls audio {
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .chunk-info {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        
+        .log-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            min-height: 300px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Day 22: Streaming Audio Playback</h1>
+        <p>Send text and listen to AI responses with seamless audio streaming!</p>
+        
+        <div id="status" class="status disconnected">
+            Status: Connecting...
+        </div>
+        
+        <div class="input-area">
+            <input type="text" id="textInput" placeholder="Enter text to convert to speech and play..." 
+                   onkeypress="if(event.key==='Enter') sendText()">
+            <button onclick="sendText()">🎙️ Speak</button>
+            <button onclick="stopAudio()">⏹️ Stop</button>
+            <button onclick="clearLog()">🗑️ Clear</button>
+        </div>
+        
+        <!-- Audio Controls -->
+        <div class="audio-controls">
+            <h3>🔊 Audio Playback</h3>
+            <audio id="audioPlayer" controls preload="none">
+                Your browser does not support the audio element.
+            </audio>
+            <div>
+                <button onclick="playCurrentAudio()">▶️ Play Current</button>
+                <button onclick="downloadAudio()">💾 Download</button>
+            </div>
+        </div>
+        
+        <!-- Streaming Stats -->
+        <div class="chunk-info">
+            <div>Chunks Received: <span id="chunkCount">0</span></div>
+            <div>Audio Length: <span id="audioLength">0</span> chars</div>
+            <div>Playback Status: <span id="playbackStatus">Ready</span></div>
+            <div>Current Progress: <span id="progress">0%</span></div>
+        </div>
+        
+        <h3>📋 Streaming & Playback Log:</h3>
+        <div id="logArea" class="log-area">
+            Waiting for connection...
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let audioChunks = [];
+        let audioQueue = [];
+        let currentAudioSrc = null;
+        let isPlaying = false;
+        let expectedChunks = 0;
+        let receivedChunks = 0;
+
+        // Audio playback management
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        // Connect to WebSocket on page load
+        window.onload = function() {
+            connectWebSocket();
+            setupAudioPlayer();
+        };
+
+        function connectWebSocket() {
+            websocket = new WebSocket('ws://localhost:8000/ws/audio-streaming');
+
+            websocket.onopen = () => {
+                updateStatus('Connected - Ready for Audio Streaming!', 'connected');
+                log('✅ Connected to Day 22 Audio Streaming WebSocket');
+            };
+
+            websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                } catch (e) {
+                    log(`📨 Text message: ${event.data}`);
+                }
+            };
+
+            websocket.onclose = () => {
+                updateStatus('Disconnected', 'disconnected');
+                log('❌ WebSocket connection closed');
+            };
+
+            websocket.onerror = (error) => {
+                log('❌ WebSocket error: ' + error);
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function setupAudioPlayer() {
+            audioPlayer.onplay = () => {
+                updatePlaybackStatus('Playing');
+                updateStatus('Playing Audio', 'playing');
+                isPlaying = true;
+            };
+            
+            audioPlayer.onpause = () => {
+                updatePlaybackStatus('Paused');
+                updateStatus('Connected - Ready for Audio!', 'connected');
+                isPlaying = false;
+            };
+            
+            audioPlayer.onended = () => {
+                updatePlaybackStatus('Ended');
+                updateStatus('Connected - Ready for Audio!', 'connected');
+                isPlaying = false;
+                log('🎵 Audio playback completed');
+            };
+            
+            audioPlayer.onerror = (e) => {
+                updatePlaybackStatus('Error');
+                log(`❌ Audio playback error: ${e.message}`);
+            };
+        }
+
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'connection_established':
+                    log(`🔗 ${data.message}`);
+                    break;
+                    
+                case 'audio_chunk':
+                    handleAudioChunk(data);
+                    break;
+                    
+                case 'keepalive':
+                    log(`💗 Keepalive at chunk ${data.chunk_progress}`);
+                    break;
+                    
+                default:
+                    log(`📨 Server: ${JSON.stringify(data)}`);
+            }
+        }
+
+        function handleAudioChunk(chunkData) {
+            receivedChunks++;
+            expectedChunks = chunkData.total_chunks;
+            
+            // Store the chunk in correct order
+            audioChunks[chunkData.chunk_index] = chunkData.data;
+            
+            // Log chunk receipt
+            log(`📦 Chunk ${chunkData.chunk_index + 1}/${chunkData.total_chunks} (${chunkData.data.length} chars)`);
+            
+            // Send acknowledgment back to server
+            const ack = {
+                type: 'chunk_acknowledgment',
+                chunk_index: chunkData.chunk_index,
+                received_length: chunkData.data.length,
+                timestamp: Date.now()
+            };
+            websocket.send(JSON.stringify(ack));
+            
+            // Update UI
+            updateChunkInfo();
+            
+            // DAY 22: Start playing audio as soon as we have enough chunks
+            if (receivedChunks >= Math.min(5, expectedChunks * 0.1)) {
+                startStreamingPlayback();
+            }
+            
+            // Check if this is the final chunk
+            if (chunkData.is_final) {
+                handleStreamingComplete();
+            }
+        }
+
+        function startStreamingPlayback() {
+            if (isPlaying || receivedChunks === 0) return;
+            
+            // Create audio from available chunks
+            const availableAudio = createAudioFromChunks();
+            if (availableAudio) {
+                playAudioStream(availableAudio);
+                log('🎵 Started streaming audio playback');
+            }
+        }
+
+        function createAudioFromChunks() {
+            // Combine available chunks (fill missing ones with empty strings)
+            let combinedAudio = '';
+            for (let i = 0; i < receivedChunks; i++) {
+                combinedAudio += audioChunks[i] || '';
+            }
+            
+            if (combinedAudio.length > 0) {
+                // Create data URL for audio playback
+                const audioSrc = `data:audio/mp3;base64,${combinedAudio}`;
+                return audioSrc;
+            }
+            return null;
+        }
+
+        function playAudioStream(audioSrc) {
+            try {
+                currentAudioSrc = audioSrc;
+                audioPlayer.src = audioSrc;
+                audioPlayer.load(); // Reload the audio element
+                
+                // Start playback
+                const playPromise = audioPlayer.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        log('🎵 Streaming audio started playing');
+                        updatePlaybackStatus('Streaming');
+                    }).catch(error => {
+                        log(`❌ Playback error: ${error.message}`);
+                        updatePlaybackStatus('Error');
+                    });
+                }
+            } catch (error) {
+                log(`❌ Audio creation error: ${error.message}`);
+            }
+        }
+
+        function handleStreamingComplete() {
+            updateStatus('Streaming Complete!', 'connected');
+            
+            // Combine all chunks for final playback
+            const fullAudioBase64 = audioChunks.join('');
+            const finalAudioSrc = `data:audio/mp3;base64,${fullAudioBase64}`;
+            
+            // Update audio player with complete audio
+            currentAudioSrc = finalAudioSrc;
+            audioPlayer.src = finalAudioSrc;
+            audioPlayer.load();
+            
+            log(`🎵 Audio streaming complete!`);
+            log(`📊 Total: ${receivedChunks} chunks, ${fullAudioBase64.length} chars`);
+            
+            // If not already playing, start now
+            if (!isPlaying) {
+                audioPlayer.play().catch(e => {
+                    log(`❌ Final playback error: ${e.message}`);
+                });
+            }
+            
+            // Reset for next streaming
+            setTimeout(() => {
+                if (!isPlaying) {
+                    resetStreamingState();
+                    updateStatus('Connected - Ready for Next Audio!', 'connected');
+                }
+            }, 1000);
+        }
+
+        function resetStreamingState() {
+            audioChunks = [];
+            receivedChunks = 0;
+            expectedChunks = 0;
+            updateChunkInfo();
+        }
+
+        function updateChunkInfo() {
+            document.getElementById('chunkCount').textContent = receivedChunks;
+            
+            const currentLength = audioChunks.join('').length;
+            document.getElementById('audioLength').textContent = currentLength;
+            
+            const progress = expectedChunks > 0 ? Math.round((receivedChunks / expectedChunks) * 100) : 0;
+            document.getElementById('progress').textContent = `${progress}%`;
+        }
+
+        function updatePlaybackStatus(status) {
+            document.getElementById('playbackStatus').textContent = status;
+        }
+
+        function sendText() {
+            const textInput = document.getElementById('textInput');
+            const text = textInput.value.trim();
+            
+            if (!text) {
+                alert('Please enter some text!');
+                return;
+            }
+            
+            if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                alert('WebSocket not connected!');
+                return;
+            }
+            
+            // Stop current audio and reset
+            stopAudio();
+            resetStreamingState();
+            updateStatus('Generating Audio...', 'streaming');
+            
+            const message = {
+                type: 'text_input',
+                text: text,
+                timestamp: Date.now()
+            };
+            
+            websocket.send(JSON.stringify(message));
+            log(`📤 Sent: "${text}"`);
+            log(`⏳ Generating and streaming audio...`);
+            
+            textInput.value = '';
+        }
+
+        function playCurrentAudio() {
+            if (currentAudioSrc) {
+                audioPlayer.src = currentAudioSrc;
+                audioPlayer.play().catch(e => {
+                    log(`❌ Playback error: ${e.message}`);
+                });
+            } else {
+                log('⚠️ No audio available to play');
+            }
+        }
+
+        function stopAudio() {
+            if (!audioPlayer.paused) {
+                audioPlayer.pause();
+                audioPlayer.currentTime = 0;
+                log('⏹️ Audio playback stopped');
+            }
+            isPlaying = false;
+            updatePlaybackStatus('Stopped');
+        }
+
+        function downloadAudio() {
+            if (currentAudioSrc) {
+                const link = document.createElement('a');
+                link.href = currentAudioSrc;
+                link.download = `day22_audio_${Date.now()}.mp3`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                log('💾 Audio download initiated');
+            } else {
+                log('⚠️ No audio available to download');
+            }
+        }
+
+        function updateStatus(text, statusClass) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `Status: ${text}`;
+            statusEl.className = `status ${statusClass}`;
+        }
+
+        function log(message) {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            
+            logArea.innerHTML += `<div>${logEntry}</div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('logArea').innerHTML = 'Log cleared...';
+            resetStreamingState();
+        }
+    </script>
+</body>
+</html>
