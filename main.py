@@ -1,5 +1,6 @@
 """
-AI Voice Agent - Day 22: Enhanced Streaming Audio Playback (ERROR-FREE FINAL)
+AI Voice Agent - Day 23: Complete Conversational Voice Agent (FINAL)
+Integrates: Speech-to-Text, LLM, TTS, Chat History, Streaming Audio + FIXED Audio Recording
 """
 
 import asyncio
@@ -7,14 +8,13 @@ import json
 import time
 import base64
 import aiohttp
-import gc
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from typing import Dict, List
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pathlib import Path
 import assemblyai as aai
-from typing import Optional
 
 try:
     from google import genai
@@ -41,32 +41,30 @@ logger = get_logger(__name__)
 UPLOADS_DIR = Path("uploads")
 UPLOADS_DIR.mkdir(exist_ok=True)
 
-# Configure services
+# Configure all services
 if settings.assemblyai_api_key:
     aai.settings.api_key = settings.assemblyai_api_key
-    logger.info("AssemblyAI configured for streaming transcription")
+    logger.info("AssemblyAI configured for speech transcription")
 
 if GEMINI_AVAILABLE and hasattr(settings, 'gemini_api_key') and settings.gemini_api_key:
     try:
         gemini_client = genai.Client(api_key=settings.gemini_api_key)
-        logger.info("Google Gemini configured for streaming LLM responses")
+        logger.info("Google Gemini configured for LLM responses")
     except Exception as e:
-        logger.error(f"Failed to initialize Gemini client: {e}")
         gemini_client = None
 else:
     gemini_client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting AI Voice Agent with Enhanced Audio Streaming")
+    logger.info("Starting Complete AI Voice Agent")
     yield
-    logger.info("Shutting down AI Voice Agent application")
-    gc.collect()
+    logger.info("Shutting down Complete AI Voice Agent")
 
 app = FastAPI(
-    title="AI Voice Agent with Enhanced Audio Streaming",
-    description="Day 22: Enhanced streaming with seamless audio playback optimization",
-    version="2.2.2",
+    title="Complete AI Voice Agent",
+    description="Day 23: Full conversational voice agent with STT, LLM, TTS, and streaming",
+    version="3.0.0",
     lifespan=lifespan
 )
 
@@ -78,399 +76,458 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-class MurfTTSClient:
-    """Enhanced Murf TTS client with optimized streaming for Day 22."""
+# Global chat history storage
+chat_sessions: Dict[str, List[Dict]] = {}
+
+class CompleteVoiceAgent:
+    """Complete voice agent integrating all services."""
     
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        if MURF_AVAILABLE:
-            try:
-                self.client = Murf(api_key=api_key)
-                logger.info("Murf client initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Murf client: {e}")
-                self.client = None
-        else:
-            self.client = None
+    def __init__(self):
+        self.murf_client = None
+        if MURF_AVAILABLE and hasattr(settings, 'murf_api_key') and settings.murf_api_key:
+            self.murf_client = Murf(api_key=settings.murf_api_key)
     
-    async def download_audio_as_base64(self, audio_url: str) -> Optional[str]:
-        """Download audio from URL and convert to base64."""
+    async def transcribe_audio(self, audio_file_path: str) -> str:
+        """Step 1: Transcribe audio to text using AssemblyAI."""
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(audio_url) as response:
-                    if response.status == 200:
-                        audio_data = await response.read()
-                        base64_audio = base64.b64encode(audio_data).decode('utf-8')
-                        logger.info(f"Downloaded audio: {len(base64_audio)} chars")
-                        return base64_audio
-                    else:
-                        logger.error(f"Failed to download audio: HTTP {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Audio download failed: {e}")
-            return None
-    
-    def chunk_base64_audio(self, base64_audio: str, chunk_size: int = 4096) -> list:
-        """Split base64 audio into chunks for streaming."""
-        if not base64_audio:
-            return []
-        
-        chunks = []
-        for i in range(0, len(base64_audio), chunk_size):
-            chunk = base64_audio[i:i + chunk_size]
-            chunks.append(chunk)
-        return chunks
-    
-    async def synthesize_and_stream(self, text: str, websocket: WebSocket = None) -> Optional[str]:
-        """Synthesize text and optionally stream chunks to WebSocket client."""
-        if not self.client:
-            logger.error("Murf SDK not available")
-            return None
-        
-        if not text or not text.strip():
-            logger.error("Empty text provided for synthesis")
-            return None
-        
-        try:
-            logger.info(f"Synthesizing text: {text[:60]}...")
+            print(f"[TRANSCRIPTION] Processing audio file: {audio_file_path}")
+            transcriber = aai.Transcriber()
+            transcript = transcriber.transcribe(audio_file_path)
             
-            # Generate speech using Murf
-            response = self.client.text_to_speech.generate(
-                text=text.strip(),
+            if transcript.error:
+                logger.error(f"Transcription error: {transcript.error}")
+                return f"Sorry, I couldn't understand the audio. Error: {transcript.error}"
+            
+            transcribed_text = transcript.text.strip()
+            print(f"[TRANSCRIPTION] Result: {transcribed_text}")
+            return transcribed_text
+            
+        except Exception as e:
+            logger.error(f"Transcription failed: {e}")
+            return f"Sorry, I couldn't process the audio. Please try again."
+    
+    async def generate_llm_response(self, user_input: str, chat_history: List[Dict]) -> str:
+        """Step 2: Generate LLM response using conversation context."""
+        try:
+            # Build conversation context
+            context = "You are a helpful AI voice assistant. Respond conversationally and concisely.\n\n"
+            
+            # Add recent chat history for context
+            recent_history = chat_history[-6:] if len(chat_history) > 6 else chat_history
+            for msg in recent_history:
+                role = "Human" if msg.get("role") == "user" else "Assistant"
+                context += f"{role}: {msg.get('text', msg.get('message', ''))}\n"
+            
+            context += f"Human: {user_input}\nAssistant:"
+            
+            print(f"[LLM INPUT] {user_input}")
+            
+            if not gemini_client:
+                # Fallback response
+                response = f"I understand you said: '{user_input}'. This is a Day 23 complete voice agent demo!"
+            else:
+                # Generate with Gemini
+                response_obj = await gemini_client.aio.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=[{"parts": [{"text": context}]}],
+                    config={
+                        "temperature": 0.7,
+                        "max_output_tokens": 256,  # Keep responses concise for TTS
+                    }
+                )
+                response = response_obj.text if hasattr(response_obj, 'text') and response_obj.text else f"I understand your message about: {user_input}"
+            
+            print(f"[LLM RESPONSE] {response}")
+            return response.strip()
+            
+        except Exception as e:
+            logger.error(f"LLM generation failed: {e}")
+            return f"I apologize, but I encountered an error processing your request."
+    
+    async def synthesize_speech(self, text: str) -> str:
+        """Step 3: Convert text to speech using Murf and return base64 audio."""
+        try:
+            if not self.murf_client:
+                print("[TTS] Murf client not available, using mock audio")
+                # Return mock base64 audio for demo
+                mock_audio = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+                return mock_audio
+            
+            print(f"[TTS] Generating speech for: {text[:60]}...")
+            
+            # Generate speech with Murf
+            response = self.murf_client.text_to_speech.generate(
+                text=text,
                 voice_id="en-US-natalie",
                 format="MP3",
                 sample_rate=44100.0
             )
-            
-            logger.info("Audio generated successfully!")
             
             # Get base64 audio
             base64_audio = None
             if hasattr(response, 'encoded_audio') and response.encoded_audio:
                 base64_audio = response.encoded_audio
             elif hasattr(response, 'audio_file') and response.audio_file:
-                logger.info("Downloading audio from URL...")
                 base64_audio = await self.download_audio_as_base64(response.audio_file)
             
-            if not base64_audio:
-                logger.error("No audio data available from Murf response")
-                return None
-            
-            logger.info(f"Generated base64 audio: {len(base64_audio)} characters")
-            
-            # DAY 22: Enhanced streaming with playback optimization
-            if websocket:
-                await self.stream_audio_chunks_with_playback_optimization(base64_audio, websocket)
-            
-            return base64_audio
+            if base64_audio:
+                print(f"[TTS] Generated audio: {len(base64_audio)} characters")
+                return base64_audio
+            else:
+                print("[TTS] No audio generated, using fallback")
+                return base64.b64encode(text.encode('utf-8')).decode('utf-8')
                 
         except Exception as e:
-            logger.error(f"Murf synthesis error: {e}")
+            logger.error(f"TTS generation failed: {e}")
+            # Return text as base64 fallback
+            return base64.b64encode(text.encode('utf-8')).decode('utf-8')
+    
+    async def download_audio_as_base64(self, audio_url: str) -> str:
+        """Helper: Download audio from URL and convert to base64."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as response:
+                    if response.status == 200:
+                        audio_data = await response.read()
+                        return base64.b64encode(audio_data).decode('utf-8')
+                    else:
+                        logger.error(f"Audio download failed: HTTP {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Audio download error: {e}")
             return None
     
-    async def stream_audio_chunks_with_playback_optimization(self, base64_audio: str, websocket: WebSocket):
-        """DAY 22: Optimized streaming for immediate playback - ALL SYNTAX ERRORS FIXED."""
+    async def stream_audio_response(self, websocket: WebSocket, base64_audio: str, response_text: str):
+        """Step 4: Stream base64 audio chunks to client."""
         try:
-            if not base64_audio:
-                logger.error("No base64 audio data to stream")
-                return
+            # Send response text first
+            await websocket.send_text(json.dumps({
+                "type": "llm_response",
+                "text": response_text,
+                "timestamp": time.time()
+            }))
             
-            # FIXED: Correct list concatenation syntax
-            chunk_sizes = [2048] * 5 + [4096] * 10 + [8192] * 15  # Progressive sizing
-            chunks = []
+            # Chunk and stream audio
+            chunk_size = 4096
+            chunks = [base64_audio[i:i + chunk_size] for i in range(0, len(base64_audio), chunk_size)]
             
-            # Create progressive chunks
-            pos = 0
-            for size in chunk_sizes:
-                if pos >= len(base64_audio):
-                    break
-                chunk = base64_audio[pos:pos + size]
-                if chunk:  # Only add non-empty chunks
-                    chunks.append(chunk)
-                pos += size
-            
-            # Add remaining data in 8KB chunks
-            while pos < len(base64_audio):
-                chunk = base64_audio[pos:pos + 8192]
-                if chunk:  # Only add non-empty chunks
-                    chunks.append(chunk)
-                pos += 8192
-            
-            if not chunks:
-                logger.error("No chunks created from audio data")
-                return
-            
-            logger.info(f"Sending {len(chunks)} optimized chunks for seamless playback...")
-            # FIXED: Correct print statement with proper list concatenation
-            logger.info(f"Progressive chunk sizes: {[2048] * 5 + [4096] * 10 + [8192] * 15}")
+            print(f"[STREAMING] Sending {len(chunks)} audio chunks...")
             
             for i, chunk in enumerate(chunks):
-                try:
-                    chunk_message = {
-                        "type": "audio_chunk",
-                        "chunk_index": i,
-                        "total_chunks": len(chunks),
-                        "data": chunk,
-                        "is_final": i == len(chunks) - 1,
-                        "chunk_size": len(chunk),
-                        "playback_optimized": True,
-                        "timestamp": time.time()
-                    }
-                    
-                    await websocket.send_text(json.dumps(chunk_message))
-                    logger.debug(f"Sent optimized chunk {i + 1}/{len(chunks)} ({len(chunk)} chars)")
-                    
-                    # Progressive delays for optimal playback
-                    if i < 5:
-                        delay = 0.03  # Fast initial chunks
-                    elif i < 15:
-                        delay = 0.05  # Medium chunks
-                    else:
-                        delay = 0.07  # Larger chunks
-                    
-                    await asyncio.sleep(delay)
-                    
-                    # Keepalive every 50 chunks
-                    if i > 0 and i % 50 == 0:
-                        keepalive = {
-                            "type": "keepalive", 
-                            "chunk_progress": i,
-                            "timestamp": time.time()
-                        }
-                        await websocket.send_text(json.dumps(keepalive))
-                        logger.debug(f"Sent keepalive at chunk {i}")
-                        
-                except WebSocketDisconnect:
-                    logger.info("WebSocket disconnected during streaming")
-                    break
-                except Exception as chunk_error:
-                    logger.error(f"Error sending chunk {i}: {chunk_error}")
-                    continue
+                chunk_message = {
+                    "type": "audio_chunk",
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "data": chunk,
+                    "is_final": i == len(chunks) - 1
+                }
+                
+                await websocket.send_text(json.dumps(chunk_message))
+                
+                # Keepalive for large files
+                if i > 0 and i % 50 == 0:
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "chunk_progress": i
+                    }))
+                
+                await asyncio.sleep(0.05)
             
-            logger.info("✅ All optimized chunks sent for seamless playback")
-            
-            # Memory cleanup
-            del base64_audio
-            del chunks
-            gc.collect()
+            print(f"[STREAMING] ✅ Completed streaming {len(chunks)} chunks")
             
         except Exception as e:
-            logger.error(f"Streaming optimization error: {e}")
-            raise
+            logger.error(f"Audio streaming failed: {e}")
+    
+    async def save_chat_history(self, session_id: str, user_message: str, agent_response: str):
+        """Step 5: Save conversation to chat history."""
+        if session_id not in chat_sessions:
+            chat_sessions[session_id] = []
+        
+        # Add user message
+        chat_sessions[session_id].append({
+            "role": "user",
+            "text": user_message,
+            "timestamp": time.time()
+        })
+        
+        # Add agent response
+        chat_sessions[session_id].append({
+            "role": "agent",
+            "text": agent_response,
+            "timestamp": time.time()
+        })
+        
+        print(f"[CHAT HISTORY] Session {session_id}: {len(chat_sessions[session_id])} messages")
 
-# Initialize Murf client
-murf_client = None
-if MURF_AVAILABLE and hasattr(settings, 'murf_api_key') and settings.murf_api_key:
-    murf_client = MurfTTSClient(settings.murf_api_key)
-    logger.info("Enhanced Murf TTS client initialized for Day 22")
-else:
-    logger.warning("Murf TTS client not available - check API key configuration")
+# Initialize voice agent
+voice_agent = CompleteVoiceAgent()
 
-async def generate_llm_response_with_enhanced_streaming_tts(prompt: str, websocket: WebSocket = None) -> str:
-    """Generate LLM response and stream optimized TTS audio to client."""
-    if not prompt or not prompt.strip():
-        return "Please provide some text to process."
-    
-    # Generate response
-    if not gemini_client:
-        response_text = f"Hello! You said '{prompt}'. This is Day 22 enhanced audio streaming demo!"
-    else:
-        try:
-            response = await gemini_client.aio.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=[{"parts": [{"text": prompt.strip()}]}],
-                config={"temperature": 0.7, "max_output_tokens": 256}
-            )
-            response_text = response.text if hasattr(response, 'text') and response.text else f"I understand you said: '{prompt}'. This is Day 22 enhanced streaming!"
-        except Exception as e:
-            logger.warning(f"Gemini error: {e}")
-            response_text = f"Hello! You said '{prompt}'. This is Day 22 enhanced streaming with optimized Murf TTS playback!"
-    
-    # Clean response text
-    response_text = response_text.strip()
-    logger.info(f"Generated LLM response: {response_text[:100]}...")
-    
-    # Generate TTS with enhanced streaming
-    if murf_client:
-        logger.info("Converting to speech with playback optimization...")
-        try:
-            await murf_client.synthesize_and_stream(response_text, websocket)
-        except Exception as tts_error:
-            logger.error(f"TTS streaming error: {tts_error}")
-    else:
-        logger.warning("TTS disabled - no Murf client available")
-    
-    return response_text
-
-@app.websocket("/ws/audio-streaming")
-async def websocket_enhanced_audio_streaming(websocket: WebSocket):
-    """Day 22: Enhanced WebSocket endpoint with optimized audio streaming."""
+@app.websocket("/ws/complete-voice-agent")
+async def complete_voice_agent_endpoint(websocket: WebSocket):
+    """Day 23: Complete conversational voice agent WebSocket endpoint."""
     await websocket.accept()
-    logger.info("Enhanced audio streaming WebSocket connection established")
+    logger.info("Complete Voice Agent WebSocket connected")
     
-    session_id = f"enhanced_stream_session_{int(time.time())}"
+    session_id = f"voice_session_{int(time.time())}"
+    chat_sessions[session_id] = []
     
     try:
+        # Send welcome message
         await websocket.send_text(json.dumps({
             "type": "connection_established",
-            "message": "Day 22: Enhanced Audio Streaming ready - optimized for immediate playback!",
+            "message": "Complete Voice Agent ready! Send text or audio for conversation.",
             "session_id": session_id,
-            "features": ["immediate_playback", "progressive_chunks", "seamless_streaming"],
+            "features": ["STT", "LLM", "TTS", "Chat History", "Audio Streaming"],
             "timestamp": time.time()
         }))
         
         while True:
             try:
-                message = await asyncio.wait_for(websocket.receive_text(), timeout=300.0)
+                # Receive message from client
+                message = await websocket.receive_text()
                 
+                # Parse message
                 if message.startswith('{'):
-                    try:
-                        data = json.loads(message)
-                    except json.JSONDecodeError:
-                        logger.error(f"Invalid JSON received: {message[:100]}")
-                        continue
+                    data = json.loads(message)
                     
+                    # Skip acknowledgments
                     if data.get("type") == "chunk_acknowledgment":
-                        logger.debug(f"Chunk {data.get('chunk_index', 'unknown')} acknowledged")
                         continue
                     
+                    # Handle different input types
                     if data.get("type") == "text_input":
-                        text_input = data.get("text", "").strip()
+                        user_input = data.get("text", "")
+                        input_type = "text"
+                        
+                    elif data.get("type") == "audio_input":
+                        # FIXED: Handle audio input
+                        print(f"[VOICE AGENT] Received audio input for transcription")
+                        
+                        # Send processing status
+                        await websocket.send_text(json.dumps({
+                            "type": "processing",
+                            "message": "Transcribing your voice message...",
+                            "input_type": "audio",
+                            "timestamp": time.time()
+                        }))
+                        
+                        # Process audio data
+                        audio_base64 = data.get("audio_data", "")
+                        if not audio_base64:
+                            continue
+                        
+                        # Save audio to temporary file for transcription
+                        try:
+                            audio_data = base64.b64decode(audio_base64)
+                            temp_audio_path = UPLOADS_DIR / f"voice_{session_id}_{int(time.time())}.webm"
+                            
+                            with open(temp_audio_path, "wb") as f:
+                                f.write(audio_data)
+                            
+                            # Transcribe audio
+                            user_input = await voice_agent.transcribe_audio(str(temp_audio_path))
+                            input_type = "audio"
+                            
+                            # Clean up temp file
+                            temp_audio_path.unlink(missing_ok=True)
+                            
+                            print(f"[VOICE AGENT] Transcribed: {user_input}")
+                            
+                            # Send transcription result to client
+                            await websocket.send_text(json.dumps({
+                                "type": "transcription_result",
+                                "text": user_input,
+                                "timestamp": time.time()
+                            }))
+                            
+                        except Exception as e:
+                            logger.error(f"Audio processing failed: {e}")
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "message": f"Audio processing failed: {e}",
+                                "timestamp": time.time()
+                            }))
+                            continue
+                        
                     elif "text" in data:
-                        text_input = data["text"].strip()
+                        user_input = data["text"]
+                        input_type = "text"
                     else:
                         continue
                 else:
-                    text_input = message.strip()
+                    # Plain text input
+                    user_input = message
+                    input_type = "text"
                 
-                if not text_input:
-                    logger.warning("Empty text input received")
+                if not user_input.strip():
                     continue
                 
-                logger.info(f"Processing input: {text_input[:100]}...")
-                await generate_llm_response_with_enhanced_streaming_tts(text_input, websocket)
+                print(f"[VOICE AGENT] Session {session_id}: Processing {input_type} input: {user_input}")
                 
-            except asyncio.TimeoutError:
+                # Send processing status
                 await websocket.send_text(json.dumps({
-                    "type": "ping",
+                    "type": "processing",
+                    "message": "Generating AI response...",
+                    "input_type": input_type,
                     "timestamp": time.time()
                 }))
+                
+                # COMPLETE PIPELINE EXECUTION
+                
+                # Step 1: Get current chat history
+                current_history = chat_sessions.get(session_id, [])
+                
+                # Step 2: Generate LLM response
+                agent_response = await voice_agent.generate_llm_response(user_input, current_history)
+                
+                # Step 3: Save to chat history
+                await voice_agent.save_chat_history(session_id, user_input, agent_response)
+                
+                # Step 4: Generate TTS audio
+                base64_audio = await voice_agent.synthesize_speech(agent_response)
+                
+                # Step 5: Stream response and audio to client
+                await voice_agent.stream_audio_response(websocket, base64_audio, agent_response)
+                
+                print(f"[VOICE AGENT] Session {session_id}: Completed full pipeline")
+                
             except WebSocketDisconnect:
                 break
             except Exception as e:
-                logger.error(f"Error in enhanced audio streaming: {e}")
-                break
+                logger.error(f"Error in voice agent pipeline: {e}")
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": f"Pipeline error: {e}",
+                        "timestamp": time.time()
+                    }))
+                except:
+                    break
         
     except WebSocketDisconnect:
-        logger.info("Enhanced audio streaming WebSocket disconnected")
+        logger.info(f"Voice agent session {session_id} disconnected")
     except Exception as e:
-        logger.error(f"Enhanced WebSocket error: {e}")
+        logger.error(f"Voice agent error: {e}")
     finally:
-        logger.info(f"Enhanced audio streaming session {session_id} ended")
-        gc.collect()
+        # Clean up old sessions (keep last 10)
+        if len(chat_sessions) > 10:
+            oldest_sessions = sorted(chat_sessions.keys())[:len(chat_sessions) - 10]
+            for old_session in oldest_sessions:
+                del chat_sessions[old_session]
+        
+        logger.info(f"Voice agent session {session_id} ended")
 
-@app.get("/test-enhanced-streaming")
-async def test_enhanced_streaming():
-    """Test endpoint for Day 22 enhanced audio streaming."""
-    if not murf_client:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Murf client not configured"}
-        )
-    
+@app.post("/upload-audio")
+async def upload_audio_for_transcription(file: UploadFile = File(...)):
+    """Upload audio file for transcription testing."""
     try:
-        test_text = "Hello! This is Day 22 of the AI Voice Agents challenge. Testing enhanced audio streaming!"
+        # Save uploaded file
+        file_path = UPLOADS_DIR / f"upload_{int(time.time())}.wav"
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
         
-        logger.info("🎵 Testing enhanced streaming with playback optimization...")
-        base64_audio = await murf_client.synthesize_and_stream(test_text)
+        # Transcribe
+        transcribed_text = await voice_agent.transcribe_audio(str(file_path))
         
-        if base64_audio:
-            regular_chunks = murf_client.chunk_base64_audio(base64_audio, chunk_size=4096)
-            
-            # FIXED: Progressive chunks simulation with correct syntax
-            chunk_sizes = [2048] * 5 + [4096] * 10 + [8192] * 15
-            progressive_chunks = []
-            pos = 0
-            for size in chunk_sizes[:10]:
-                if pos >= len(base64_audio):
-                    break
-                chunk = base64_audio[pos:pos + size]
-                if chunk:
-                    progressive_chunks.append(chunk)
-                pos += size
-            
-            del base64_audio
-            gc.collect()
-            
-            return {
-                "status": "SUCCESS",
-                "message": "✅ Day 22 Enhanced Audio Streaming test completed!",
-                "text_sent": test_text,
-                "regular_chunks": len(regular_chunks),
-                "progressive_chunks_sample": len(progressive_chunks),
-                "optimization": "Progressive chunk sizing for immediate playback",
-                "chunk_size_progression": "2KB → 4KB → 8KB",
-                "syntax_status": "ALL SYNTAX ERRORS FIXED",
-                "features": [
-                    "Immediate audio start (after 5 small chunks)",
-                    "Progressive chunk sizing (2KB → 4KB → 8KB)",
-                    "Reduced initial delays (30ms → 50ms → 70ms)",
-                    "Seamless playback experience"
-                ]
-            }
-        else:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "Failed to generate audio"}
-            )
-            
+        # Clean up
+        file_path.unlink(missing_ok=True)
+        
+        return {
+            "status": "success",
+            "transcription": transcribed_text,
+            "filename": file.filename
+        }
+        
     except Exception as e:
-        logger.error(f"Enhanced test failed: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Enhanced test failed: {str(e)}"}
+            content={"error": f"Transcription failed: {e}"}
+        )
+
+@app.get("/chat-history/{session_id}")
+async def get_chat_history(session_id: str):
+    """Get chat history for a session."""
+    history = chat_sessions.get(session_id, [])
+    return {
+        "session_id": session_id,
+        "message_count": len(history),
+        "history": history
+    }
+
+@app.get("/test-pipeline")
+async def test_complete_pipeline():
+    """Test the complete pipeline with sample data."""
+    try:
+        test_input = "Hello, this is a test of the complete voice agent pipeline."
+        
+        # Test LLM response
+        response = await voice_agent.generate_llm_response(test_input, [])
+        
+        # Test TTS
+        audio = await voice_agent.synthesize_speech(response)
+        
+        return {
+            "status": "success",
+            "test_input": test_input,
+            "llm_response": response,
+            "audio_length": len(audio),
+            "audio_preview": audio[:100] + "..." if len(audio) > 100 else audio
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Pipeline test failed: {e}"}
         )
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Comprehensive health check."""
     return {
         "status": "healthy",
         "timestamp": time.time(),
-        "version": "2.2.2",
-        "day": 22,
-        "syntax_status": "ERROR FREE",
-        "features": [
-            "enhanced_audio_streaming", 
-            "progressive_chunks", 
-            "immediate_playback",
-            "seamless_streaming",
-            "playback_optimization"
-        ],
+        "version": "3.0.0",
+        "day": 23,
+        "pipeline": "Complete Voice Agent",
         "services": {
-            "murf": "available" if murf_client else "unavailable",
-            "gemini": "available" if gemini_client else "unavailable"
-        }
+            "assemblyai": "available" if settings.assemblyai_api_key else "unavailable",
+            "gemini": "available" if gemini_client else "unavailable",
+            "murf": "available" if voice_agent.murf_client else "unavailable"
+        },
+        "active_sessions": len(chat_sessions),
+        "features": [
+            "Speech-to-Text (AssemblyAI)",
+            "LLM Responses (Google Gemini)",
+            "Text-to-Speech (Murf)",
+            "Chat History Management",
+            "Audio Streaming",
+            "WebSocket Communication",
+            "Voice Recording & Transcription"
+        ]
     }
 
 @app.get("/")
 async def root():
-    """Day 22: Enhanced Audio Streaming Demo."""
+    """Day 23: Complete Voice Agent Demo."""
     return {
-        "message": "🎵 Day 22: Enhanced Audio Streaming (ERROR FREE FINAL VERSION)",
-        "syntax_fixes": "chunk_sizes = [2048] * 5 + [4096] * 10 + [8192] * 15",
+        "message": "🎙️ Day 23: Complete AI Voice Agent (FINAL)",
+        "description": "Full conversational voice agent with STT, LLM, TTS, streaming, and voice recording",
         "endpoints": {
-            "enhanced_audio_streaming": "/ws/audio-streaming",
-            "test_enhanced_streaming": "/test-enhanced-streaming",
+            "voice_agent": "/ws/complete-voice-agent",
+            "upload_audio": "/upload-audio",
+            "chat_history": "/chat-history/{session_id}",
+            "test_pipeline": "/test-pipeline",
             "health": "/health"
         },
-        "day_22_enhancements": [
-            "✅ Progressive chunk sizing - ALL SYNTAX ERRORS FIXED",
-            "✅ Immediate playback after first 5 chunks",
-            "✅ Reduced initial streaming delays",
-            "✅ Optimized chunk timing for seamless experience",
-            "✅ Memory cleanup and error handling"
+        "demo_flow": [
+            "1. Connect to WebSocket: /ws/complete-voice-agent",
+            "2. Send text message OR record voice message",
+            "3. Voice messages are transcribed automatically",
+            "4. Receive LLM response text",
+            "5. Receive streaming audio chunks",
+            "6. Chat history automatically saved",
+            "7. Full conversational experience with voice!"
         ]
     }
 

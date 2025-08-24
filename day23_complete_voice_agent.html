@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day 23: Complete Voice Agent (FINAL)</title>
+    
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(15px);
+        }
+        .status { 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            font-weight: bold; 
+            text-align: center;
+        }
+        .connected { background: rgba(76, 175, 80, 0.8); }
+        .disconnected { background: rgba(244, 67, 54, 0.8); }
+        .processing { background: rgba(255, 152, 0, 0.8); animation: pulse 2s infinite; }
+        .playing { background: rgba(156, 39, 176, 0.8); animation: pulse 1.5s infinite; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .input-section {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        input[type="text"] {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+        }
+        
+        button {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 25px;
+            background: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        button:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+        
+        .record-btn {
+            background: #FF5722;
+        }
+        
+        .record-btn:hover {
+            background: #E64A19;
+        }
+        
+        .recording {
+            background: #f44336 !important;
+            animation: pulse 1s infinite;
+        }
+        
+        .audio-section {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .conversation {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .message {
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 10px;
+            animation: slideIn 0.5s ease;
+        }
+        
+        .user-message {
+            background: rgba(100, 200, 255, 0.3);
+            border-left: 4px solid #64C8FF;
+        }
+        
+        .agent-message {
+            background: rgba(255, 165, 0, 0.3);
+            border-left: 4px solid #FFA500;
+        }
+        
+        .voice-message {
+            background: rgba(156, 39, 176, 0.3);
+            border-left: 4px solid #9C27B0;
+        }
+        
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ Day 23: Complete AI Voice Agent</h1>
+        <p>Full conversational AI with Speech-to-Text, LLM, Text-to-Speech, and streaming audio!</p>
+        
+        <div id="status" class="status disconnected">
+            Status: Connecting...
+        </div>
+        
+        <!-- Input Section -->
+        <div class="input-section">
+            <h3>💬 Conversation Input</h3>
+            <div class="input-area">
+                <input type="text" id="textInput" placeholder="Type your message or question..." 
+                       onkeypress="if(event.key==='Enter') sendTextMessage()">
+                <button onclick="sendTextMessage()">💬 Send Text</button>
+                <button onclick="startRecording()" id="recordBtn" class="record-btn">🎤 Record</button>
+                <button onclick="clearConversation()">🗑️ Clear</button>
+            </div>
+        </div>
+        
+        <!-- Audio Section -->
+        <div class="audio-section">
+            <h3>🔊 AI Voice Response</h3>
+            <audio id="audioPlayer" controls style="width: 100%; margin: 10px 0;">
+                Your browser does not support audio playback.
+            </audio>
+            <div style="text-align: center;">
+                <button onclick="stopAudio()">⏹️ Stop</button>
+                <button onclick="downloadAudio()">💾 Download</button>
+            </div>
+        </div>
+        
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                Messages: <strong id="messageCount">0</strong>
+            </div>
+            <div class="stat-card">
+                Audio Length: <strong id="audioLength">0</strong> chars
+            </div>
+            <div class="stat-card">
+                Pipeline: <strong id="pipelineStatus">Ready</strong>
+            </div>
+            <div class="stat-card">
+                Session: <strong id="sessionId">None</strong>
+            </div>
+        </div>
+        
+        <!-- Conversation History -->
+        <div class="conversation" id="conversationArea">
+            <div style="text-align: center; opacity: 0.6;">
+                Start a conversation by typing a message or recording audio...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let audioChunks = [];
+        let currentSessionId = null;
+        let messageCount = 0;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let recordedAudioChunks = [];
+
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        // Connect on page load
+        window.onload = function() {
+            connectWebSocket();
+            setupAudioPlayer();
+        };
+
+        function setupAudioPlayer() {
+            audioPlayer.onplay = () => {
+                updateStatus('Playing AI Response', 'playing');
+            };
+            
+            audioPlayer.onpause = () => {
+                updateStatus('Connected - Voice Agent Ready!', 'connected');
+            };
+            
+            audioPlayer.onended = () => {
+                updateStatus('Connected - Voice Agent Ready!', 'connected');
+            };
+        }
+
+        function connectWebSocket() {
+            websocket = new WebSocket('ws://localhost:8000/ws/complete-voice-agent');
+
+            websocket.onopen = () => {
+                updateStatus('Connected - Complete Voice Agent Ready!', 'connected');
+                log('✅ Connected to Complete Voice Agent');
+            };
+
+            websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                } catch (e) {
+                    log(`📨 ${event.data}`);
+                }
+            };
+
+            websocket.onclose = () => {
+                updateStatus('Disconnected', 'disconnected');
+                log('❌ Voice Agent disconnected');
+            };
+
+            websocket.onerror = (error) => {
+                log('❌ WebSocket error: ' + error);
+            };
+        }
+
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'connection_established':
+                    currentSessionId = data.session_id;
+                    updateSessionId(currentSessionId);
+                    log(`🔗 ${data.message}`);
+                    updatePipelineStatus('Connected');
+                    break;
+                    
+                case 'processing':
+                    updateStatus('Processing...', 'processing');
+                    updatePipelineStatus(data.message);
+                    log(`⏳ ${data.message}`);
+                    break;
+                    
+                case 'transcription_result':
+                    // Update the voice message placeholder with actual transcription
+                    const messages = document.querySelectorAll('.user-message');
+                    const lastMessage = messages[messages.length - 1];
+                    if (lastMessage && lastMessage.innerHTML.includes('Voice Message - Processing')) {
+                        lastMessage.innerHTML = `<strong>You (Voice):</strong><br>🎤 "${data.text}"`;
+                        lastMessage.className = 'message user-message voice-message';
+                    }
+                    log(`🎤 Transcribed: ${data.text}`);
+                    break;
+                    
+                case 'llm_response':
+                    addAgentMessage(data.text);
+                    updatePipelineStatus('Generating Audio');
+                    break;
+                    
+                case 'audio_chunk':
+                    handleAudioChunk(data);
+                    break;
+                    
+                case 'keepalive':
+                    // Silent keepalive
+                    break;
+                    
+                case 'error':
+                    log(`❌ Error: ${data.message}`);
+                    updateStatus('Error - Try Again', 'disconnected');
+                    updatePipelineStatus('Error');
+                    break;
+                    
+                default:
+                    log(`📨 ${JSON.stringify(data)}`);
+            }
+        }
+
+        function handleAudioChunk(chunkData) {
+            audioChunks[chunkData.chunk_index] = chunkData.data;
+            
+            // Start playing after first few chunks
+            if (chunkData.chunk_index === 4) {
+                startAudioPlayback();
+            }
+            
+            // Update progress
+            const progress = Math.round(((chunkData.chunk_index + 1) / chunkData.total_chunks) * 100);
+            updatePipelineStatus(`Streaming ${progress}%`);
+            
+            // Send acknowledgment
+            websocket.send(JSON.stringify({
+                type: 'chunk_acknowledgment',
+                chunk_index: chunkData.chunk_index,
+                timestamp: Date.now()
+            }));
+            
+            // Complete streaming
+            if (chunkData.is_final) {
+                completeAudioStreaming();
+            }
+        }
+
+        function startAudioPlayback() {
+            try {
+                const partialAudio = audioChunks.slice(0, 5).join('');
+                if (partialAudio) {
+                    const audioSrc = `data:audio/mp3;base64,${partialAudio}`;
+                    audioPlayer.src = audioSrc;
+                    audioPlayer.play().catch(e => console.log('Playback pending'));
+                    updateStatus('Playing AI Response', 'playing');
+                }
+            } catch (e) {
+                console.log('Audio playback error:', e);
+            }
+        }
+
+        function completeAudioStreaming() {
+            const fullAudio = audioChunks.join('');
+            const audioSrc = `data:audio/mp3;base64,${fullAudio}`;
+            
+            audioPlayer.src = audioSrc;
+            audioPlayer.load();
+            
+            updateAudioLength(fullAudio.length);
+            updatePipelineStatus('Complete');
+            updateStatus('Connected - Voice Agent Ready!', 'connected');
+            
+            log(`🎵 Audio streaming complete (${fullAudio.length} chars)`);
+            
+            // Reset for next conversation
+            audioChunks = [];
+        }
+
+        function sendTextMessage() {
+            const textInput = document.getElementById('textInput');
+            const text = textInput.value.trim();
+            
+            if (!text || !websocket || websocket.readyState !== WebSocket.OPEN) {
+                alert('Enter text and ensure connection is active');
+                return;
+            }
+            
+            // Add user message to conversation
+            addUserMessage(text, false);
+            
+            // Send to voice agent
+            websocket.send(JSON.stringify({
+                type: 'text_input',
+                text: text,
+                timestamp: Date.now()
+            }));
+            
+            textInput.value = '';
+            log(`📤 Sent text: ${text}`);
+        }
+
+        // FIXED: Complete audio recording implementation
+        async function startRecording() {
+            const recordBtn = document.getElementById('recordBtn');
+            
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        }
+                    });
+                    
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
+                    
+                    recordedAudioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            recordedAudioChunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = async () => {
+                        // Create audio blob
+                        const audioBlob = new Blob(recordedAudioChunks, { type: 'audio/webm' });
+                        
+                        // Convert to base64 for WebSocket transmission
+                        const base64Audio = await blobToBase64(audioBlob);
+                        
+                        // Send audio to backend WebSocket
+                        if (websocket && websocket.readyState === WebSocket.OPEN) {
+                            const audioMessage = {
+                                type: 'audio_input',
+                                audio_data: base64Audio,
+                                audio_format: 'webm',
+                                timestamp: Date.now()
+                            };
+                            
+                            websocket.send(JSON.stringify(audioMessage));
+                            log('🎤 Audio sent to backend for transcription');
+                            
+                            // Add placeholder message to conversation
+                            addUserMessage('🎤 Voice Message - Processing...', true);
+                        } else {
+                            alert('WebSocket not connected!');
+                        }
+                        
+                        // Clean up
+                        stream.getTracks().forEach(track => track.stop());
+                        isRecording = false;
+                        recordBtn.textContent = '🎤 Record';
+                        recordBtn.className = 'record-btn';
+                    };
+                    
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.textContent = '⏹️ Stop Recording';
+                    recordBtn.className = 'record-btn recording';
+                    log('🎤 Recording started...');
+                    
+                    // Auto-stop after 30 seconds
+                    setTimeout(() => {
+                        if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+                            mediaRecorder.stop();
+                        }
+                    }, 30000);
+                    
+                } catch (error) {
+                    alert('Microphone access denied: ' + error.message);
+                    log('❌ Microphone error: ' + error.message);
+                }
+            } else {
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+            }
+        }
+
+        // Helper function to convert blob to base64
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function addUserMessage(text, isVoice = false) {
+            const conversation = document.getElementById('conversationArea');
+            
+            // Clear placeholder if first message
+            if (messageCount === 0) {
+                conversation.innerHTML = '';
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isVoice ? 'message user-message voice-message' : 'message user-message';
+            const prefix = isVoice ? 'You (Voice)' : 'You';
+            messageDiv.innerHTML = `<strong>${prefix}:</strong><br>${text}`;
+            
+            conversation.appendChild(messageDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+            
+            messageCount++;
+            updateMessageCount(messageCount);
+        }
+
+        function addAgentMessage(text) {
+            const conversation = document.getElementById('conversationArea');
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message agent-message';
+            messageDiv.innerHTML = `<strong>🤖 AI Agent:</strong><br>${text}`;
+            
+            conversation.appendChild(messageDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+            
+            messageCount++;
+            updateMessageCount(messageCount);
+        }
+
+        function stopAudio() {
+            if (!audioPlayer.paused) {
+                audioPlayer.pause();
+                audioPlayer.currentTime = 0;
+            }
+            updateStatus('Connected - Voice Agent Ready!', 'connected');
+        }
+
+        function downloadAudio() {
+            if (audioPlayer.src) {
+                const link = document.createElement('a');
+                link.href = audioPlayer.src;
+                link.download = `voice_agent_${Date.now()}.mp3`;
+                link.click();
+                log('💾 Audio download initiated');
+            }
+        }
+
+        function clearConversation() {
+            document.getElementById('conversationArea').innerHTML = `
+                <div style="text-align: center; opacity: 0.6;">
+                    Start a conversation by typing a message or recording audio...
+                </div>
+            `;
+            messageCount = 0;
+            updateMessageCount(0);
+            audioChunks = [];
+            updateAudioLength(0);
+        }
+
+        function updateStatus(text, className) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `Status: ${text}`;
+            statusEl.className = `status ${className}`;
+        }
+
+        function updateMessageCount(count) {
+            document.getElementById('messageCount').textContent = count;
+        }
+
+        function updateAudioLength(length) {
+            document.getElementById('audioLength').textContent = length;
+        }
+
+        function updatePipelineStatus(status) {
+            document.getElementById('pipelineStatus').textContent = status;
+        }
+
+        function updateSessionId(sessionId) {
+            document.getElementById('sessionId').textContent = sessionId.split('_')[2] || 'None';
+        }
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            console.log(`[${timestamp}] ${message}`);
+        }
+    </script>
+</body>
+</html>
